@@ -35,6 +35,7 @@ from app.models.people import Permit, Resident, Visitor
 from app.models.security import BlacklistEntry
 from app.models.vehicle import Vehicle
 from app.cv.utils import normalize_plate, plate_variants
+from app.services.compound_policy import AccessPolicy, CompoundPolicy
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,8 @@ class ReasonCode:
     VISITOR_EXIT = "visitor_exit"
     REGISTERED_EXIT = "registered_exit"
     MANUAL_OVERRIDE = "manual_override"
+    FACE_REQUIRED_MISSING = "face_required_missing"
+    BLACKLIST_EXIT_ALLOWED = "blacklist_exit_allowed"
 
 
 REASON_MESSAGES: dict[str, str] = {
@@ -94,7 +97,14 @@ REASON_MESSAGES: dict[str, str] = {
     ReasonCode.VISITOR_EXIT: "Visitor checking out of the compound",
     ReasonCode.REGISTERED_EXIT: "Vehicle exiting the compound",
     ReasonCode.MANUAL_OVERRIDE: "Decision overridden by a security officer",
+    ReasonCode.FACE_REQUIRED_MISSING: "Compound policy requires a recognised driver face",
+    ReasonCode.BLACKLIST_EXIT_ALLOWED: "Blacklisted entity allowed to leave the compound",
 }
+
+
+def describe_reason(reason_code: str) -> str:
+    """Human sentence for a reason code (used by the dashboard explainer)."""
+    return REASON_MESSAGES.get(reason_code, reason_code.replace("_", " ").title())
 
 
 @dataclass(slots=True)
@@ -164,7 +174,8 @@ class AccessDecisionEngine:
     ) -> DecisionResult:
         gate = context.gate
         now = as_utc(context.occurred_at)
-        compound_settings = await self._compound_settings(session, gate.compound_id)
+        policy = await self.policy(session, gate.compound_id)
+        access: AccessPolicy = policy.access
         normalized_plate = normalize_plate(context.plate_text)
         lookup_keys = plate_variants(context.plate_text)
 
@@ -188,11 +199,11 @@ class AccessDecisionEngine:
             open_barrier: bool | None = None,
             details: dict[str, Any] | None = None,
         ) -> DecisionResult:
-            allow_auto_open = bool(compound_settings.get("auto_open_barrier", True))
+            allow_auto_open = access.auto_open_barrier
             return DecisionResult(
                 decision=decision,
                 reason_code=reason_code,
-                reason=REASON_MESSAGES.get(reason_code, reason_code.replace("_", " ").title()),
+                reason=describe_reason(reason_code),
                 method=method,
                 direction=direction,
                 requires_review=decision == AccessDecision.REVIEW,
@@ -224,6 +235,18 @@ class AccessDecisionEngine:
                 BlacklistEntryType.FACE: ReasonCode.BLACKLIST_FACE,
                 BlacklistEntryType.PERSON: ReasonCode.BLACKLIST_PERSON,
             }[blacklist_hit.entry_type]
+            if direction == AccessDirection.EXIT and access.allow_blacklist_exit:
+                return result(
+                    AccessDecision.ALLOW,
+                    ReasonCode.BLACKLIST_EXIT_ALLOWED,
+                    AccessMethod.COMBINED if context.face_resident_id else AccessMethod.PLATE,
+                    details={
+                        "blacklist_entry_id": str(blacklist_hit.id),
+                        "blacklist_reason": blacklist_hit.reason.value
+                        if hasattr(blacklist_hit.reason, "value")
+                        else str(blacklist_hit.reason),
+                    },
+                )
             return result(
                 AccessDecision.DENY,
                 reason_code,
@@ -284,6 +307,15 @@ class AccessDecisionEngine:
                             "recognised_resident_id": str(face_resident.id),
                         },
                     )
+                if access.require_face_for_vehicle and face_resident is None:
+                    return result(
+                        AccessDecision.REVIEW,
+                        ReasonCode.FACE_REQUIRED_MISSING,
+                        AccessMethod.PLATE,
+                        resident=owner,
+                        open_barrier=False,
+                        details={"policy": "require_face_for_vehicle"},
+                    )
                 method = (
                     AccessMethod.COMBINED
                     if face_resident is not None
@@ -330,7 +362,7 @@ class AccessDecisionEngine:
             )
 
         # -------------------------------------------------------- 5. face recognition
-        allow_face_entry = bool(compound_settings.get("allow_face_only_entry", True))
+        allow_face_entry = access.allow_face_only_entry
         if face_resident is not None:
             if face_resident.status != ResidentStatus.ACTIVE:
                 return result(
@@ -359,35 +391,37 @@ class AccessDecisionEngine:
                 )
 
         # ------------------------------------------------------------- 6. unknown
+        # The compound decides whether an unregistered vehicle is silently
+        # logged ("unknown") or queued for a human ("review") / refused.
+        fallback = access.unknown_vehicle_decision
         if normalized_plate:
             if vehicle is not None:
                 # Visitor vehicle registered without a permit.
                 return result(
-                    AccessDecision.UNKNOWN,
+                    fallback,
                     ReasonCode.UNKNOWN_VISITOR_NO_PERMIT,
                     AccessMethod.PLATE,
                     open_barrier=False,
                 )
             return result(
-                AccessDecision.UNKNOWN,
+                fallback,
                 ReasonCode.UNKNOWN_PLATE,
                 AccessMethod.PLATE,
                 open_barrier=False,
-                details={"plate": context.plate_text},
+                details={"plate": context.plate_text, "policy": "unknown_vehicle_decision"},
             )
         return result(
-            AccessDecision.UNKNOWN,
+            fallback,
             ReasonCode.NO_SIGNAL,
             AccessMethod.PLATE,
             open_barrier=False,
         )
 
     # ------------------------------------------------------------------ queries
-    async def _compound_settings(
-        self, session: AsyncSession, compound_id: uuid.UUID
-    ) -> dict[str, Any]:
+    async def policy(self, session: AsyncSession, compound_id: uuid.UUID) -> CompoundPolicy:
+        """Load the validated operational policy for a compound."""
         compound = await session.get(Compound, compound_id)
-        return dict(compound.settings or {}) if compound else {}
+        return CompoundPolicy.from_settings(compound.settings if compound else None)
 
     async def _find_vehicle(
         self, session: AsyncSession, compound_id: uuid.UUID, lookup_keys: set[str]

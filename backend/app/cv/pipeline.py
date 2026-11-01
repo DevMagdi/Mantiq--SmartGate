@@ -24,9 +24,16 @@ from app.cv.types import (
     PlateReader,
     PlateReading,
     RawFrame,
+    VisionOptions,
     VisionResult,
 )
-from app.cv.utils import clean_plate_text, normalize_plate, valid_plate_candidate
+from app.cv.utils import (
+    clean_plate_text,
+    normalize_plate,
+    parse_plate,
+    quality_score,
+    valid_plate_candidate,
+)
 
 logger = get_logger(__name__)
 
@@ -112,15 +119,29 @@ class GateVisionPipeline:
         )
 
     # ------------------------------------------------------------------ plate
-    def _read_plate(self, frame: RawFrame) -> tuple[PlateReading | None, list[str]]:
+    def _read_plate(
+        self,
+        frame: RawFrame,
+        options: VisionOptions | None = None,
+    ) -> tuple[PlateReading | None, list[str]]:
         warnings: list[str] = []
+        plate_threshold = (
+            self.plate_confidence
+            if options is None or options.plate_confidence is None
+            else options.plate_confidence
+        )
+        ocr_threshold = (
+            self.ocr_confidence
+            if options is None or options.ocr_confidence is None
+            else options.ocr_confidence
+        )
         image = frame.image
         try:
             detections = self.plate_detector.detect(image)
         except Exception as exc:  # pragma: no cover - detector failure
             logger.error("Plate detection failed: %s", exc)
             return None, [f"plate_detector_error:{exc}"]
-        detections = [d for d in detections if d.confidence >= self.plate_confidence][:3]
+        detections = [d for d in detections if d.confidence >= plate_threshold][:3]
         if not detections:
             return None, warnings
 
@@ -144,10 +165,13 @@ class GateVisionPipeline:
             if not valid_plate_candidate(text):
                 warnings.append("ocr_rejected_text")
                 continue
-            if reading.confidence < self.ocr_confidence:
+            if reading.confidence < ocr_threshold:
                 warnings.append(f"ocr_low_confidence:{reading.confidence:.2f}")
                 continue
-            score = reading.confidence * detection.confidence
+            # Blend OCR confidence with plate plausibility: a confident read
+            # that violates the Egyptian layout should not win over a slightly
+            # weaker but structurally valid one.
+            score = quality_score(reading.confidence, parse_plate(text)) * detection.confidence
             if score > best_score:
                 best_score = score
                 best = PlateReading(
@@ -161,7 +185,10 @@ class GateVisionPipeline:
 
     # ------------------------------------------------------------------- face
     def _read_face(
-        self, frame: RawFrame, gallery: FaceGallery | None
+        self,
+        frame: RawFrame,
+        gallery: FaceGallery | None,
+        options: VisionOptions | None = None,
     ) -> tuple[FaceDetection | None, FaceMatch | None, list[str]]:
         warnings: list[str] = []
         try:
@@ -173,8 +200,13 @@ class GateVisionPipeline:
             return None, None, warnings
         face = faces[0]
         match: FaceMatch | None = None
+        threshold = (
+            self.face_threshold
+            if options is None or options.face_similarity is None
+            else options.face_similarity
+        )
         if gallery is not None and len(gallery) and face.embedding is not None:
-            gallery_match = gallery.match(face.embedding, self.face_threshold)
+            gallery_match = gallery.match(face.embedding, threshold)
             if gallery_match is not None:
                 match = FaceMatch(
                     resident_id=gallery_match.resident_id,
@@ -192,6 +224,7 @@ class GateVisionPipeline:
         *,
         annotate: bool = True,
         include_face: bool = True,
+        options: VisionOptions | None = None,
     ) -> VisionResult:
         """Run plate + face recognition on one frame."""
         started = time.perf_counter()
@@ -199,12 +232,12 @@ class GateVisionPipeline:
         for component in (self.plate_detector, self.plate_reader, self.face_detector):
             _inject_meta(component, meta)
 
-        plate, plate_warnings = self._read_plate(frame)
+        plate, plate_warnings = self._read_plate(frame, options)
         face: FaceDetection | None = None
         face_match: FaceMatch | None = None
         face_warnings: list[str] = []
-        if include_face:
-            face, face_match, face_warnings = self._read_face(frame, gallery)
+        if include_face and (options is None or options.include_face):
+            face, face_match, face_warnings = self._read_face(frame, gallery, options)
 
         snapshot_url: str | None = None
         plate_crop_url: str | None = None
@@ -251,7 +284,11 @@ class GateVisionPipeline:
         )
 
     def analyze_image(
-        self, image: Image, gallery: FaceGallery | None = None, meta: dict[str, Any] | None = None
+        self,
+        image: Image,
+        gallery: FaceGallery | None = None,
+        meta: dict[str, Any] | None = None,
+        options: VisionOptions | None = None,
     ) -> VisionResult:
         """Analyse a single uploaded image (manual verification workflow)."""
         now = dt.datetime.now(dt.UTC)
@@ -263,7 +300,7 @@ class GateVisionPipeline:
             captured_at=now,
             meta=meta or {},
         )
-        return self.process(frame, gallery=gallery)
+        return self.process(frame, gallery=gallery, options=options)
 
 
 class Deduplicator:

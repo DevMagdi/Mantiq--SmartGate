@@ -16,7 +16,7 @@ from app.cv.engine import VisionEngine
 from app.cv.gallery import FaceGallery
 from app.cv.pipeline import Deduplicator
 from app.cv.sources import DemoFrameSource, FrameSource, OpenCVFrameSource
-from app.cv.types import RawFrame, VisionResult
+from app.cv.types import RawFrame, VisionOptions, VisionResult
 from app.models.enums import CameraSourceType, CameraStatus
 
 logger = get_logger(__name__)
@@ -35,6 +35,7 @@ class CameraConfig:
     source_url: str
     fps_limit: float = 5.0
     position: str = "front"
+    vision: VisionOptions = field(default_factory=VisionOptions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +153,10 @@ class CameraWorker(threading.Thread):
             )
             try:
                 result = self.engine.process(
-                    raw_frame, gallery=self._gallery_provider(), annotate=True
+                    raw_frame,
+                    gallery=self._gallery_provider(),
+                    annotate=True,
+                    options=self.config.vision,
                 )
             except VisionEngineError as exc:
                 self._emit_status(CameraStatus.ERROR, str(exc))
