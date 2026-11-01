@@ -19,6 +19,9 @@ operations that work on a single box or in Docker Compose.
 
 **Vision & access control**
 
+- **Egyptian plate detector included**: one-command download + sha256 verification
+  of a YOLOv8m/YOLOv8s model trained on Egyptian plates (`scripts/fetch_plate_model.py`),
+  plus an ONNX path (`CV_PLATE_DETECTOR=onnx`) for YOLOv5/v7 checkpoints.
 - YOLOv8/v10 plate detection → OCR (EasyOCR **or** PaddleOCR, swappable) → normalised
   plate with confidence and crop.
 - InsightFace face detection + 512-d embeddings with cosine-similarity gallery
@@ -137,7 +140,7 @@ Deep dives:
 │   │   ├── cli.py          seed, create-admin, expire-permits, check
 │   │   └── main.py         app factory, lifespan, routers, static media
 │   ├── alembic/            migration environment + initial schema
-│   ├── tests/              pytest suite (65 tests)
+│   ├── tests/              pytest suite (150+ tests)
 │   ├── requirements*.txt   core / CV / dev / PaddleOCR splits
 │   └── Dockerfile
 ├── frontend/
@@ -152,7 +155,9 @@ Deep dives:
 │   │   └── App.tsx         routing
 │   ├── Dockerfile, nginx.conf
 │   └── index.html, vite.config.ts, tailwind.config.js
-├── docs/                   architecture, API, CV pipeline
+├── scripts/
+│   └── fetch_plate_model.py  download + verify an Egyptian plate detector
+├── docs/                   architecture, API, CV pipeline, real deployment
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -178,9 +183,11 @@ docker compose up --build
 
 The API applies migrations (`alembic upgrade head`) and starts with **production
 defaults**: `CV_MODE=real`, `SEED_DEMO_DATA=false` (only the bootstrap admin
-account), no demo cameras. Add your cameras in **Settings → Cameras** (or via
-`CAMERAS_JSON`) and put the plate model in `./backend/models/` — the worker image
-installs the full CV stack (`INSTALL_CV=true`).
+account), no demo cameras. Fetch the Egyptian plate detector into
+`./backend/models/` with one command (see
+[How to run in Real Mode with Egyptian plates](#how-to-run-in-real-mode-with-egyptian-plates)),
+add your cameras in **Settings → Cameras** (or via `CAMERAS_JSON`) — the worker
+image installs the full CV stack (`INSTALL_CV=true`).
 
 On a fresh database the API creates one bootstrap admin
 (`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, default `admin@gatevision.app` /
@@ -208,6 +215,74 @@ yellow "mock mode" banner so nobody mistakes it for a live site.
 
 ---
 
+## How to run in Real Mode with Egyptian plates
+
+Real mode is the default (`CV_MODE=real`) and GateVision ships with a verified
+**Egyptian plate detector** — no labelling, no training, no Python dependencies on
+the host:
+
+```bash
+# 1. Download + verify the weights (standard library only)
+python3 scripts/fetch_plate_model.py            # YOLOv8m, 50 MB, best accuracy
+#    CPU-only mini-PC instead:
+python3 scripts/fetch_plate_model.py --source egy-v8s   # YOLOv8s, 22 MB
+
+# 2. Start the stack — compose mounts ./backend/models at /app/models (read-only)
+cp .env.example .env
+docker compose up --build -d
+
+# 3. Prove the engine really loaded it
+curl -s localhost:8000/api/v1/cv/status \
+  | jq '{mode, engine_ready, models_loaded, warnings}'
+```
+
+Both checkpoints are single-class (`License Plate`) YOLOv8 detectors trained on
+Egyptian plates, so they run with the defaults (`CV_PLATE_DETECTOR=yolo`,
+`CV_PLATE_MODEL_PATH=/app/models/plate_yolov8.pt`) and need no conversion:
+
+| `--source` | Weights | Why choose it |
+| --- | --- | --- |
+| `egy-v8m` (**default**) | YOLOv8m · 50 MB · 99.5 % mAP@50 on 3,547 Egyptian images ([Ahmad-ElToraby/EALPR](https://github.com/Ahmad-ElToraby/EALPR)) | native Ultralytics checkpoint, best recall at night and at an angle |
+| `egy-v8s` | YOLOv8s · 22 MB ([Egyptian-Plate-Detector-V2](https://github.com/Ahmed482-21albadawy/Egyptian-Plate-Detector-V2)) | ~2× faster on CPU; use it on 4-core boxes |
+
+The fetcher refuses HTML error pages, non-YOLO files and models without a
+plate-like class, and compares the pinned sha256 — so you know the weights are
+the ones this repo documents. `--verify-only` re-checks an existing file.
+
+Then point GateVision at your lane:
+
+1. **Settings → Cameras → Add camera**: paste the RTSP URL
+   (`rtsp://user:pass@10.0.0.11:554/Streaming/Channels/101`), pick the gate and
+   direction (`entry` / `exit`), keep `source_type=rtsp`, press **Test stream** —
+   you must see a snapshot and a resolution before the lane is enabled.
+2. Wait for the badge to turn **online**; `GET /api/v1/cv/camera-health` shows
+   fps, frames read, reconnects and the last error per camera.
+3. Drive a car past the camera. Live Monitor shows the real plate crop, the OCR
+   text, the decision and its reason code. **Nothing is simulated in real mode** —
+   a frame with no detected plate produces no event at all, and mock scenarios
+   are refused.
+
+**YOLOv5/v7 Egyptian model instead?** (e.g.
+`AbdelrhmanNile/yolov7_egy_car_plates_detection`, `moshabann/yolov5-alpr-egypt`)
+Export it once, then switch engines — the worker needs no torch for this path:
+
+```bash
+yolo export model=car_plate_detector.pt format=onnx opset=12       # YOLOv5
+python export.py --weights car_plate_detector.pt --include onnx     # YOLOv7
+cp car_plate_detector.onnx backend/models/plate_egy_v5.onnx
+
+CV_PLATE_DETECTOR=onnx \
+CV_PLATE_MODEL_PATH=/app/models/plate_egy_v5.onnx \
+docker compose up -d
+```
+
+`CV_PLATE_DETECTOR=onnx` decodes both YOLOv5 (`[1,N,5+nc]`) and YOLOv8
+(`[1,4+nc,N]`) heads through OpenCV DNN and filters plate classes before NMS.
+Full runbook: [docs/real-deployment.md](docs/real-deployment.md) §3 and
+[docs/rtsp-cameras.md](docs/rtsp-cameras.md) §2.
+
+---
+
 ## Local development (no Docker)
 
 **Backend**
@@ -217,6 +292,9 @@ cd backend
 python3.11 -m venv ../.venv && source ../.venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env                 # SQLite + AUTO_CREATE_TABLES + mock CV
+pip install -r requirements-cv.txt   # YOLO + EasyOCR + InsightFace (real mode)
+python3 ../scripts/fetch_plate_model.py   # -> backend/models/plate_yolov8.pt
+#   ...then set CV_MODE=real in backend/.env for a real pipeline
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -287,7 +365,9 @@ The most important variables:
 | `CV_RTSP_TRANSPORT` | `tcp` | `tcp` \| `udp` \| `auto` |
 | `CAMERAS_JSON` | empty | bootstrap cameras from the environment |
 | `CV_RUNNER_ENABLED` | `true` | In-process camera workers |
-| `CV_PLATE_MODEL_PATH` | `models/plate_yolov8.pt` | YOLO weights |
+| `CV_PLATE_MODEL_PATH` | `models/plate_yolov8.pt` | Plate weights (`scripts/fetch_plate_model.py`) |
+| `CV_PLATE_DETECTOR` | `yolo` | `yolo` (Ultralytics `.pt`) \| `onnx` (exported YOLOv5/v7) |
+| `CV_PLATE_CLASS_NAMES` | `plate,license_plate,…,لوحة` | which model classes count as a plate |
 | `CV_YOLO_IMAGE_SIZE` / `CV_YOLO_IOU` | 640 / 0.45 | Detector input + NMS |
 | `CV_YOLO_DEVICE` / `CV_YOLO_HALF` | auto / `false` | `cpu`, `0`, `cuda:1`; FP16 on GPU |
 | `CV_OCR_ENGINE` | `easyocr` | `easyocr` \| `paddleocr` |
@@ -376,9 +456,9 @@ three runbooks below; they are written to be followed in order.
    Prometheus alerts, go-live smoke test and rollback plan. The API itself refuses
    to boot in production with a placeholder `SECRET_KEY`, `DEBUG=true` or a
    wildcard `CORS_ORIGINS`.
-2. **[docs/rtsp-cameras.md](docs/rtsp-cameras.md)** — move `CV_MODE=mock` to
-   `CV_MODE=real`: camera placement/encoding, model weights (including
-   fine-tuning a plate model on Egyptian plates), per-compound thresholds,
+2. **[docs/rtsp-cameras.md](docs/rtsp-cameras.md)** — real mode in depth
+   (`CV_MODE=real` is already the default): camera placement/encoding, the
+   Egyptian plate models and how to fetch/verify them, per-compound thresholds,
    shadow mode, and the camera troubleshooting table.
 3. **[docs/hardware.md](docs/hardware.md)** — connect the barrier: signed HTTP
    webhook, MQTT or GPIO relay, with verification snippets, retry semantics and
@@ -446,6 +526,9 @@ curl -s https://gates.example.com/metrics | grep gatevision_cv_engine_ready
 | Symptom | Fix |
 | --- | --- |
 | `503 vision_unavailable` | Real models requested but not loaded; check `/cv/status.warnings` and `CV_*` paths. |
+| `model not found` for `/app/models/plate_yolov8.pt` | weights are not in `backend/models/` (or `CV_MODELS_DIR`): run `python3 scripts/fetch_plate_model.py` on the host. |
+| Fetcher says `sha256 mismatch` | upstream re-uploaded the checkpoint; inspect it with `--verify-only --json`, then re-run with `--no-checksum` if you trust the source. |
+| Detector loads but never finds plates | wrong model (e.g. a vehicle detector): `--verify-only` prints the class names — the model must contain a `plate`-like class. |
 | No detections in mock mode | Check `CV_ENABLED`, `CV_DEMO_CAMERAS`, and that cameras are `online` in Settings. |
 | WebSocket stays “connecting” | Token expired, or the reverse proxy is not forwarding `Upgrade` headers (see `frontend/nginx.conf`). |
 | Seed says “skipped” | The demo compound already exists; use `python -m app.cli seed` for details or a fresh database. |

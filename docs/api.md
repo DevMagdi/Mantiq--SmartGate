@@ -345,7 +345,7 @@ two explainability signals:
 | `POST` | `/cv/refresh-gallery` | manager | Hot reload after bulk import |
 | `GET` | `/cv/workers` | any | In-process worker status |
 | `GET` | `/cv/camera-health` | any scoped | Per-camera health: status, redacted source, resolution, frame age, worker state + fleet counters |
-| `GET` | `/cv/real-mode` | any scoped | Proof of no-mock deployment: mode, `real_detections_only`, demo cameras, barrier driver, model paths, warnings |
+| `GET` | `/cv/real-mode` | any scoped | Proof of no-mock deployment: mode, `real_detections_only`, demo cameras, barrier driver, model paths, `plate_model_present`, warnings |
 | `POST` | `/cv/cameras/{id}/test` | manager | Probe a stream once: latency, resolution, brightness, preview JPEG URL, error + actionable hint |
 | `GET` | `/cv/cameras/{id}/snapshot` | manager | A single live JPEG frame (dashboard preview) |
 | `POST` | `/cv/analyze` | manager | Multipart `gate_id`, `file`, optional `demo_scenario` |

@@ -81,7 +81,40 @@ backend/models/
 └── insightface/buffalo_l/ # CV_FACE_MODEL_NAME=buffalo_l (auto-downloaded on first use)
 ```
 
-Using your own plate model (recommended for Egyptian plates):
+**Egyptian plates: use a pretrained detector (recommended).** You do not have to
+label anything to get started:
+
+```bash
+python3 scripts/fetch_plate_model.py             # YOLOv8m, 50 MB (default)
+python3 scripts/fetch_plate_model.py --source egy-v8s   # YOLOv8s, 22 MB, CPU-friendly
+```
+
+The fetcher writes `backend/models/plate_yolov8.pt` (the compose mount point),
+verifies the sha256 and prints the task plus class names. Both models are
+single-class `License Plate` YOLOv8 checkpoints trained on Egyptian data, so
+`CV_PLATE_DETECTOR=yolo` works with zero extra configuration.
+
+* `egy-v8m` → [Ahmad-ElToraby/EALPR](https://github.com/Ahmad-ElToraby/EALPR),
+  3,547 images, 99.5 % mAP@50 — best for GPU / 8-vCPU workers.
+* `egy-v8s` → [Egyptian-Plate-Detector-V2](https://github.com/Ahmed482-21albadawy/Egyptian-Plate-Detector-V2)
+  — ~2× faster on weak CPUs, slightly lower recall on small/blurred plates.
+
+**YOLOv5/v7 source** (for example `yolov7_egy_car_plates_detection` or
+`moshabann/yolov5-alpr-egypt`)? Export it once and switch the engine — no torch
+needed on the worker:
+
+```bash
+yolo export model=car_plate_detector.pt format=onnx opset=12      # YOLOv5
+python export.py --weights car_plate_detector.pt --include onnx    # YOLOv7
+cp car_plate_detector.onnx backend/models/plate_egy_v5.onnx
+# then: CV_PLATE_DETECTOR=onnx  CV_PLATE_MODEL_PATH=models/plate_egy_v5.onnx
+```
+
+`CV_PLATE_DETECTOR=onnx` (aliases `openvino`, `cv2`) runs the graph through
+`cv2.dnn`, decodes both YOLOv5 (`[1,N,5+nc]`) and YOLOv8 (`[1,4+nc,N]`) heads and
+filters classes before NMS, so a multi-class model still reports plates.
+
+**Training your own model** (only when the shipped models miss your plate style):
 
 1. Label 500–2000 frames from **your own cameras** (Roboflow, CVAT, Label Studio)
    with one class, `plate`.
@@ -106,8 +139,9 @@ CV_ENABLED=true
 CV_RUNNER_ENABLED=false      # true only for the in-process single-node setup
 CV_MODE=real
 
-CV_PLATE_DETECTOR=yolo
+CV_PLATE_DETECTOR=yolo          # or: onnx (exported YOLOv5/v7)
 CV_PLATE_MODEL_PATH=models/plate_yolov8.pt
+CV_PLATE_CLASS_NAMES=plate,license_plate,number_plate,plate_number,car_plate,egy_plate,egyptian_plate,لوحة_سيارة,لوحة
 CV_PLATE_CONFIDENCE_THRESHOLD=0.35
 CV_OCR_ENGINE=easyocr
 CV_OCR_LANGUAGES=["en"]
