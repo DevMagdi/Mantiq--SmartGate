@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.metrics import record_enrollment
 from app.core.exceptions import BadRequestError, NotFoundError, VisionEngineError
 from app.core.logging import get_logger
 from app.cv.engine import get_vision_engine
@@ -162,6 +163,7 @@ class FaceService:
 
         report = assess_face_image(image, faces, rules, duplicate_similarity=similarity)
         if not report.passed:
+            record_enrollment("rejected")
             raise BadRequestError(
                 "The photo did not pass the enrollment quality checks.",
                 code="enrollment_rejected",
@@ -197,6 +199,7 @@ class FaceService:
         session.add(record)
         await session.commit()
         await session.refresh(record)
+        record_enrollment("accepted")
         logger.info(
             "Face enrolled for resident %s (dim=%d, similarity=%s)",
             resident_id,

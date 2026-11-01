@@ -11,6 +11,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from sqlalchemy import func, select
+
 from app.db.session import session_scope
 from app.models.access import AccessLog
 from app.models.enums import AccessDecision, AccessDirection, AccessMethod
@@ -124,3 +126,84 @@ def _admin(client: TestClient) -> dict[str, str]:
         json={"email": "admin@gatevision.app", "password": "Admin@12345"},
     ).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_retention_supports_dry_run_and_batching(
+    client: TestClient, demo: dict[str, Any]
+) -> None:
+    """Dry-run reports work without deleting; batched purge respects the cap."""
+
+    async def scenario() -> tuple[dict[str, int], dict[str, int], int, int]:
+        async with session_scope() as session:
+            for offset in range(3):
+                session.add(
+                    AccessLog(
+                        compound_id=uuid.UUID(demo["compound"]["id"]),
+                        gate_id=uuid.UUID(demo["gate"]["id"]),
+                        direction=AccessDirection.ENTRY,
+                        occurred_at=datetime.now(UTC) - timedelta(days=900 + offset),
+                        decision=AccessDecision.ALLOW,
+                        reason_code="retention_batch_test",
+                        reason="Synthetic row used to test batched retention",
+                        access_method=AccessMethod.MANUAL,
+                        gate_opened=False,
+                    )
+                )
+            await session.commit()
+
+        async with session_scope() as session:
+            preview = await purge_expired_records(
+                session, access_log_days=800, dry_run=True, batch_size=100
+            )
+
+        async with session_scope() as session:
+            remaining = await session.scalar(
+                select(func.count(AccessLog.id)).where(
+                    AccessLog.reason_code == "retention_batch_test"
+                )
+            )
+
+        async with session_scope() as session:
+            first = await purge_expired_records(
+                session, access_log_days=800, batch_size=1, max_batches=1
+            )
+
+        async with session_scope() as session:
+            second = await purge_expired_records(
+                session, access_log_days=800, batch_size=10, max_batches=10
+            )
+
+        async with session_scope() as session:
+            left = await session.scalar(
+                select(func.count(AccessLog.id)).where(
+                    AccessLog.reason_code == "retention_batch_test"
+                )
+            )
+        return preview, first, int(remaining or 0), int(left or 0)
+
+    preview, first_pass, remaining_after_dry_run, left_after_purge = asyncio.run(scenario())
+    assert preview["access_logs_purged"] == 3
+    assert remaining_after_dry_run == 3, "dry-run must not delete anything"
+    assert first_pass["access_logs_purged"] == 1
+    assert first_pass["backlog_remaining"] >= 1
+    assert left_after_purge == 0
+
+    report = asyncio.run(_retention_report())
+    assert report["access_log_retention_days"] >= 365
+    assert "expired_access_logs" in report
+
+
+async def _retention_report() -> dict[str, Any]:
+    from app.tasks.maintenance import retention_report
+
+    async with session_scope() as session:
+        return await retention_report(session)
+
+
+def test_run_once_reports_duration_and_ok(client: TestClient) -> None:
+    stats = asyncio.run(run_once(dry_run=True))
+    assert stats["ok"] is True
+    assert stats["dry_run"] is True
+    assert stats["duration_ms"] >= 0
+    assert stats["errors"] == []
+    assert "ran_at" in stats

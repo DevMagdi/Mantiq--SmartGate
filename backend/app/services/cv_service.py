@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.events import publish_event
 from app.core.logging import get_logger
+from app.core.metrics import set_engine_state
 from app.cv.engine import get_vision_engine
 from app.cv.gate_controller import GateController, get_gate_controller
 from app.models.compound import Camera, Compound, Gate
@@ -44,6 +45,11 @@ class CvService:
         if compound_id is not None:
             stmt = stmt.where(FaceEmbedding.compound_id == compound_id)
         gallery_size = int(await session.scalar(stmt) or 0)
+        set_engine_state(
+            ready=bool(engine_status["engine_ready"]),
+            mode=str(engine_status["mode"]),
+            gallery_entries=gallery_size,
+        )
         return VisionPipelineStatus(
             mode=str(engine_status["mode"]),
             plate_detector=str(engine_status["plate_detector"]),

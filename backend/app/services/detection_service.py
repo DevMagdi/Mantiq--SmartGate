@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.events import publish_event
 from app.core.exceptions import BadRequestError
 from app.core.logging import get_logger
+from app.core.metrics import record_decision, record_vision_result
 from app.cv.engine import VisionEngine, get_vision_engine
 from app.cv.gate_controller import AccessDecisionEngine, DecisionContext, DecisionResult, get_gate_controller
 from app.cv.snapshots import SnapshotStore
@@ -121,6 +122,16 @@ class DetectionService:
             occurred_at=occurred_at,
         )
         decision = await self.decision_engine.decide(session, context)
+        record_decision(decision.decision.value, decision.reason_code)
+        record_vision_result(
+            "plate+face"
+            if result.plate and result.face
+            else "plate"
+            if result.plate
+            else "face"
+            if result.face
+            else "none"
+        )
 
         # ------------------------------------------------------ gate actuation
         gate_opened = False

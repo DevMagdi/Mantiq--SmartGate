@@ -155,6 +155,11 @@ class ActuatorRegistry:
             "warnings": list(self._warnings.get(compound_id, [])),
         }
 
+    @property
+    def active_compounds(self) -> int:
+        """Number of compounds with a prepared actuator (readiness/debug)."""
+        return len(self._actuators)
+
     def reset_sync(self) -> None:
         """Clear caches without awaiting (used by tests)."""
         self._actuators.clear()

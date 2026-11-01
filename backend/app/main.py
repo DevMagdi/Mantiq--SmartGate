@@ -23,6 +23,7 @@ from app.core.cache import close_cache
 from app.core.config import settings
 from app.core.events import get_event_bus, shutdown_event_bus
 from app.core.logging import configure_logging, get_logger
+from app.core.metrics import set_app_info, set_engine_state
 from app.cv.engine import get_vision_engine
 from app.cv.manager import CameraManager, set_camera_manager
 from app.db.session import dispose_engine, get_engine
@@ -52,10 +53,8 @@ OPENAPI_TAGS = [
 
 async def _startup_tasks(app: FastAPI) -> None:
     settings.ensure_directories()
-    if settings.is_production and settings.SECRET_KEY.startswith("change-me"):
-        raise RuntimeError(
-            "SECRET_KEY must be set to a strong random value when ENVIRONMENT=production"
-        )
+    for warning in settings.validate_production():
+        logger.warning("Configuration: %s", warning)
     if settings.AUTO_CREATE_TABLES:
         from app.models import Base
 
@@ -72,6 +71,8 @@ async def _startup_tasks(app: FastAPI) -> None:
         except Exception:  # pragma: no cover - defensive: never block boot on seed
             logger.exception("Startup seeding failed; continuing without demo data")
 
+    set_app_info(__version__, settings.ENVIRONMENT, settings.CV_MODE)
+    set_engine_state(ready=settings.CV_MODE == "mock", mode=settings.CV_MODE)
     await get_event_bus().start()
     if settings.MAINTENANCE_ENABLED:
         app.state.maintenance_task = asyncio.create_task(
@@ -79,9 +80,14 @@ async def _startup_tasks(app: FastAPI) -> None:
         )
 
     if settings.CV_ENABLED:
-        app.state.cv_warmup_task = asyncio.create_task(
-            get_vision_engine().warmup_async(), name="cv-warmup"
-        )
+        async def _warm_engine() -> bool:
+            engine = get_vision_engine()
+            ready = await engine.warmup_async()
+            status = engine.status()
+            set_engine_state(ready=ready, mode=str(status["mode"]))
+            return ready
+
+        app.state.cv_warmup_task = asyncio.create_task(_warm_engine(), name="cv-warmup")
     if settings.CV_ENABLED and settings.CV_RUNNER_ENABLED:
         manager = CameraManager(
             engine=get_vision_engine(), on_result=detection_service.handle_envelope

@@ -33,6 +33,7 @@ from app.models.enums import (
 from app.models.people import Permit, Resident, Visitor
 from app.models.security import BlacklistEntry
 from app.models.vehicle import Vehicle
+from app.core.metrics import record_barrier_command
 from app.cv.actuators import (
     BARRIER_ACTIONS,
     ActuatorRegistry,
@@ -632,6 +633,7 @@ class GateController:
                 error=str(exc),
             )
 
+        record_barrier_command(result.driver, action, result.accepted)
         record = self.journal.record(
             gate_code=gate.code,
             action=action,
