@@ -13,6 +13,18 @@ from app.cv.types import BoundingBox, Image, PlateDetection
 logger = get_logger(__name__)
 
 
+def normalise_class_name(name: object) -> str:
+    """Normalise a model class label for matching.
+
+    Egyptian plate models in the wild use ``License Plate``, ``license-plate``,
+    ``plate`` or ``رقم_اللوحة``; all of them must map to the same token so the
+    dashboards and the class filter behave the same regardless of the dataset.
+    """
+    if name is None:
+        return ""
+    return "_".join(str(name).strip().lower().replace("-", "_").split())
+
+
 class YOLOPlateDetector:
     """Ultralytics YOLOv8/YOLOv10 wrapper trained for plate detection.
 
@@ -61,8 +73,9 @@ class YOLOPlateDetector:
         if not self.model_path.exists():
             self._load_error = (
                 f"Plate detection model not found at '{self.model_path}'. "
-                "Download a YOLO plate model and set CV_PLATE_MODEL_PATH, or run with "
-                "CV_MODE=mock for the offline demo pipeline."
+                "Run `python3 scripts/fetch_plate_model.py` to download a verified "
+                "Egyptian plate detector, or point CV_PLATE_MODEL_PATH at your own "
+                "YOLOv8/YOLO11 weights (docs/real-deployment.md §3)."
             )
             raise VisionEngineError(self._load_error)
         try:
@@ -96,7 +109,7 @@ class YOLOPlateDetector:
         name, so every detection is kept.
         """
         wanted = {
-            token.strip().lower()
+            normalise_class_name(token)
             for token in (settings.CV_PLATE_CLASS_NAMES or "").split(",")
             if token.strip()
         }
@@ -105,7 +118,7 @@ class YOLOPlateDetector:
         matched = {
             index
             for index, name in enumerate(self._class_names)
-            if name.strip().lower() in wanted
+            if normalise_class_name(name) in wanted
         }
         if not matched:
             return None
@@ -120,16 +133,20 @@ class YOLOPlateDetector:
         self.load()
         assert self._model is not None
         try:
-            results = self._model.predict(
-                image,
-                conf=self.confidence,
-                iou=self.iou,
-                imgsz=self.image_size,
-                max_det=self.max_detections,
-                verbose=False,
-                device=self.device,
-                half=self.half,
-            )
+            # ``half`` (fp16) only makes sense on a CUDA device; recent
+            # Ultralytics releases also emit a deprecation warning when it is
+            # passed as False on CPU, so only forward it when enabled.
+            predict_kwargs: dict[str, Any] = {
+                "conf": self.confidence,
+                "iou": self.iou,
+                "imgsz": self.image_size,
+                "max_det": self.max_detections,
+                "verbose": False,
+                "device": self.device,
+            }
+            if self.half:
+                predict_kwargs["half"] = True
+            results = self._model.predict(image, **predict_kwargs)
         except Exception as exc:  # pragma: no cover - inference failure
             logger.error("YOLO inference failed: %s", exc)
             return []

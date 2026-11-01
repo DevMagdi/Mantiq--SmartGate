@@ -89,6 +89,9 @@ class RealModeStatus(BaseModel):
     demo_cameras: int = 0
     barrier_driver: str = ""
     models: dict[str, str] = Field(default_factory=dict)
+    # Whether CV_PLATE_MODEL_PATH exists on the worker host: the dashboard uses
+    # this to tell an operator "download the weights" from "the camera is blind".
+    plate_model_present: bool = False
 
 
 __all__ = [
