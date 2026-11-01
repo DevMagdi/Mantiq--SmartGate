@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -170,6 +171,7 @@ class CvService:
                 "face": str(engine_status["face_engine"]),
                 "model_path": str(settings.CV_PLATE_MODEL_PATH),
             },
+            plate_model_present=Path(settings.CV_PLATE_MODEL_PATH).exists(),
         )
 
     async def refresh_gallery(self) -> None:

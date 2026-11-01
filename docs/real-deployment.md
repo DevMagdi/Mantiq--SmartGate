@@ -152,18 +152,105 @@ shown as `reconnects` in `GET /api/v1/cv/camera-health`.
 
 ## 3. Load the real models
 
-1. Put the plate detector in `backend/models/plate_yolov8.pt`
-   (or any path inside the mounted `CV_MODELS_DIR`).
-2. Point the config at it (`CV_PLATE_MODEL_PATH`, default `/app/models/plate_yolov8.pt`).
+### 3.1 Egyptian plate detector — one command
+
+`scripts/fetch_plate_model.py` downloads a **YOLOv8 detector trained on Egyptian
+plates**, verifies its checksum and proves it contains a plate class before you
+ever start a camera:
+
+```bash
+python3 scripts/fetch_plate_model.py --list      # sources, sizes, sha256
+python3 scripts/fetch_plate_model.py             # -> backend/models/plate_yolov8.pt
+python3 scripts/fetch_plate_model.py --source egy-v8s   # lighter CPU model
+python3 scripts/fetch_plate_model.py --verify-only      # re-check the file on disk
+```
+
+| `--source` | Weights | Upstream | Use it when |
+| --- | --- | --- | --- |
+| `egy-v8m` (**default**) | YOLOv8m · 50 MB | [Ahmad-ElToraby/EALPR](https://github.com/Ahmad-ElToraby/EALPR) — 3,547 Egyptian images, 99.5 % mAP@50 | GPU, or an 8-vCPU box |
+| `egy-v8s` | YOLOv8s · 22 MB | [Egyptian-Plate-Detector-V2](https://github.com/Ahmed482-21albadawy/Egyptian-Plate-Detector-V2) | 4-core mini-PC, CPU-only worker |
+
+Both are single-class (`License Plate`) Ultralytics checkpoints, so they work
+with the default `CV_PLATE_DETECTOR=yolo` and need no conversion. The script
+prints a report like:
+
+```
+✓ model verified
+  file        : /srv/Mantiq--SmartGate/backend/models/plate_yolov8.pt
+  size        : 49.6 MB
+  sha256      : c7ce27a0…22b8c04
+  task        : detect
+  classes     : license, License Plate, plate_detector
+```
+
+It refuses HTML error pages, non-YOLO checkpoints and models without a
+plate-like class, and compares the sha256 with the pinned value
+(`--no-checksum` when you deliberately use a different build). Run it on the
+host — it needs only the Python standard library — then `docker compose` mounts
+`./backend/models` at `/app/models` read-only.
+
+1. Weights live in `backend/models/plate_yolov8.pt` (or any path inside the
+   mounted `CV_MODELS_DIR`).
+2. `CV_PLATE_MODEL_PATH` defaults to `/app/models/plate_yolov8.pt` in Compose and
+   `models/plate_yolov8.pt` outside it.
 3. InsightFace `buffalo_l` downloads itself on first start into the model cache
    (mount a volume on `~/.insightface` in fully offline sites).
 
-The model must be a YOLOv8/YOLO11 detector with a class named `plate`
-(or override `CV_PLATE_CLASS_NAMES`, default
-`plate,license_plate,number_plate,plate_number`). Training recipe, export and validation live in
-[`cv-pipeline.md`](cv-pipeline.md); Egyptian plate character rules (Arabic →
-Latin transliteration, Arabic-Indic digits) are applied after OCR by
-`app/cv/plate_rules.py`.
+**Throughput (measured, CPU-only).** On a 2-vCPU container `egy-v8m` takes
+~0.7 s per 1280×720 frame at `CV_YOLO_IMAGE_SIZE=640`; `egy-v8s` is roughly half
+that, and a single T4/RTX-class GPU brings either model below 50 ms. Because the
+pipeline samples at `CV_MAX_FPS=5` and de-duplicates for `CV_DEDUPE_SECONDS`, a
+4-vCPU box handles one or two lanes comfortably:
+
+| Hardware | Lanes (5 fps, 1 plate pass each) | Notes |
+| --- | --- | --- |
+| 2 vCPU (dev / single gate) | 1 | expect ~2 s latency on a burst; use `egy-v8s` |
+| 4–8 vCPU | 2–4 | set `CV_YOLO_IMAGE_SIZE=512` if plates still fill >15 % of the frame |
+| 1× GPU (T4 / RTX 3050+) | 8+ | set `CV_YOLO_HALF=true`; GPU is the cheapest way to add lanes |
+
+Verify the deployed model actually sees plates before opening a lane: run
+`POST /api/v1/cv/analyze` with a frame from that camera and confirm a plate box
+plus OCR text come back (the endpoint also accepts `demo_scenario` — **refused in
+real mode** by design).
+
+The class filter normalises names, so `plate`, `License Plate`,
+`license-plate` and `لوحة سيارة` all match. Override `CV_PLATE_CLASS_NAMES`
+(default `plate,license_plate,number_plate,plate_number,car_plate,egy_plate,
+egyptian_plate,لوحة_سيارة,لوحة`). If a model has **no** plate class the filter is
+disabled and every class is treated as a plate — check `/cv/status` warnings and
+`GET /cv/real-mode` after changing models.
+Egyptian plate character rules (Arabic → Latin transliteration, Arabic-Indic
+digits) are applied after OCR by `app/cv/plate_rules.py`.
+
+### 3.2 Using a YOLOv5 / YOLOv7 Egyptian model (ONNX)
+
+Older Egyptian datasets (for example
+`AbdelrhmanNile/yolov7_egy_car_plates_detection`, `moshabann/yolov5-alpr-egypt`)
+publish YOLOv5/v7 checkpoints that the Ultralytics loader cannot open. Export
+them to ONNX once and let OpenCV DNN run them:
+
+```bash
+# YOLOv5 (Ultralytics)
+yolo export model=car_plate_detector.pt format=onnx opset=12 imgsz=640
+# YOLOv7 (WongKinYiu repo)
+python export.py --weights car_plate_detector.pt --include onnx --img-size 640 640
+cp car_plate_detector.onnx backend/models/plate_egy_v5.onnx
+
+CV_PLATE_DETECTOR=onnx
+CV_PLATE_MODEL_PATH=/app/models/plate_egy_v5.onnx
+```
+
+`CV_PLATE_DETECTOR=onnx` (aliases `openvino`, `cv2`) needs no torch on the
+worker — only OpenCV, which the image already installs. The decoder handles both
+YOLOv5/v7 `[1, N, 5 + nc]` and YOLOv8/11 `[1, 4 + nc, N]` heads and applies
+class filtering *before* NMS, so multi-class models still report plates.
+
+### 3.3 Train your own detector (optional)
+
+Training recipe, validation and export steps live in
+[`cv-pipeline.md`](cv-pipeline.md). Fine-tune `yolov8n.pt` on 500–2000 frames
+from **your own** cameras (night, rain, angle) when the shipped models miss your
+plate style, then drop `best.pt` in `backend/models/`.
 
 `GET /api/v1/cv/real-mode` lists the exact model path and whether the engine is
 ready — the dashboard shows the same panel under **Settings → Cameras**.

@@ -91,7 +91,9 @@ class Settings(BaseSettings):
     # ``CV_MODE=mock`` must be requested explicitly and is only meant for
     # offline development, tests and the scripted demo.
     CV_MODE: CvMode = "real"
-    CV_PLATE_DETECTOR: str = "yolo"  # yolo | mock
+    # yolo = Ultralytics .pt (YOLOv8/YOLO11, the Egyptian models we ship docs for)
+    # onnx = exported YOLOv5/YOLOv7 detector (cv2.dnn, no extra dependencies)
+    CV_PLATE_DETECTOR: str = "yolo"  # yolo | onnx | mock
     CV_PLATE_MODEL_PATH: str = "models/plate_yolov8.pt"
     CV_YOLO_IMAGE_SIZE: int = 640
     CV_YOLO_IOU: float = 0.45
@@ -99,7 +101,10 @@ class Settings(BaseSettings):
     CV_YOLO_HALF: bool = False
     # Class names used to pick plates out of a multi-class model. Ignored when
     # the model has none of them (single-class custom plate weights).
-    CV_PLATE_CLASS_NAMES: str = "plate,license_plate,number_plate,plate_number"
+    CV_PLATE_CLASS_NAMES: str = (
+        "plate,license_plate,number_plate,plate_number,car_plate,egy_plate,"
+        "egyptian_plate,لوحة_سيارة,لوحة"
+    )
     CV_OCR_ALLOWLIST: bool = True
 
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
@@ -238,6 +243,11 @@ class Settings(BaseSettings):
             return issues
         if (self.CV_PLATE_DETECTOR or "").lower() == "mock":
             issues.append("CV_PLATE_DETECTOR=mock in real mode: plates are simulated")
+        elif (self.CV_PLATE_DETECTOR or "").lower() not in {"yolo", "onnx", "openvino", "cv2"}:
+            issues.append(
+                f"CV_PLATE_DETECTOR={self.CV_PLATE_DETECTOR!r} is not supported; "
+                "use 'yolo' (Ultralytics .pt) or 'onnx' (exported YOLOv5/v7)"
+            )
         if (self.CV_OCR_ENGINE or "").lower() == "mock":
             issues.append("CV_OCR_ENGINE=mock in real mode: plate text is simulated")
         if (self.CV_FACE_ENGINE or "").lower() == "mock":

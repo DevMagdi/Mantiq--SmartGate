@@ -83,7 +83,7 @@ app/
 ├── services/            business rules, authorization scoping, persistence,
 │                        compound_policy.py (validated per-compound settings)
 ├── cv/                  ALL computer vision and gate-control code
-│   ├── detectors/       plate detector interface (YOLO + mock)
+│   ├── detectors/       plate detectors: Ultralytics .pt, exported ONNX, mock
 │   ├── recognizers/     OCR + face recognizer interfaces (EasyOCR/Paddle, InsightFace/mock)
 │   ├── pipeline.py      frame → detections → crops → VisionResult
 │   ├── plate_rules.py   Egyptian plate parsing/normalisation/variants
@@ -295,7 +295,9 @@ screens but is never the security boundary.
 ## 10. Extension points
 
 * **Swap the plate detector** — implement `PlateDetector.detect()` in
-  `app/cv/detectors/`, register it in the factory, set `CV_PLATE_DETECTOR`.
+  `app/cv/detectors/`, export it from `app/cv/detectors/__init__.py`, register it in
+  `VisionEngine._build_plate_detector`, and select it with `CV_PLATE_DETECTOR`
+  (`yolo` | `onnx` | `mock`).
 * **Swap OCR / face engine** — same recipe under `app/cv/recognizers/`.
 * **New access rule** — add a reason code and a branch to `AccessDecisionEngine`;
   keep it pure (no I/O outside the session) so it stays unit-testable.

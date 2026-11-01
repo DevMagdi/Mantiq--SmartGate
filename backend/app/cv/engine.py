@@ -12,6 +12,7 @@ from app.core.exceptions import VisionEngineError
 from app.core.logging import get_logger
 from app.cv.detectors.insightface_face import InsightFaceDetector
 from app.cv.detectors.mock import MockFaceDetector, MockPlateDetector
+from app.cv.detectors.onnx_plate import ONNXPlateDetector
 from app.cv.detectors.yolo_plate import YOLOPlateDetector
 from app.cv.gallery import FaceGallery
 from app.cv.pipeline import GateVisionPipeline
@@ -87,6 +88,8 @@ class VisionEngine:
         if engine == "mock":
             self._warnings.append("Plate detector explicitly set to mock")
             return MockPlateDetector()
+        if engine in {"onnx", "openvino", "cv2"}:
+            return ONNXPlateDetector()
         return YOLOPlateDetector()
 
     def _build_plate_reader(self) -> Any:

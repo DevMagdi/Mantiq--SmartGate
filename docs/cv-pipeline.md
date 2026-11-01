@@ -268,10 +268,13 @@ of deleting rows.
 
 1. Install the CV stack: `pip install -r backend/requirements-cv.txt`
    (Docker: the `cv-worker` image is built with `INSTALL_CV=true`).
-2. Download a plate model and point `CV_PLATE_MODEL_PATH` at it
-   (`backend/models/plate_yolov8.pt` is the compose mount point).
-3. Set `CV_MODE=real`, `CV_PLATE_DETECTOR=yolo`, `CV_OCR_ENGINE=easyocr`,
-   `CV_FACE_ENGINE=insightface`.
+2. Fetch the Egyptian plate detector:
+   `python3 scripts/fetch_plate_model.py` → `backend/models/plate_yolov8.pt`
+   (the compose mount point, `CV_PLATE_MODEL_PATH`). `--source egy-v8s` for the
+   22 MB CPU-friendly model. For YOLOv5/v7 weights export to ONNX and set
+   `CV_PLATE_DETECTOR=onnx` instead.
+3. Set `CV_MODE=real` (already the default), `CV_PLATE_DETECTOR=yolo`,
+   `CV_OCR_ENGINE=easyocr`, `CV_FACE_ENGINE=insightface`.
 4. Run `POST /api/v1/cv/warmup` and confirm `engine_ready=true`; check
    `/cv/status.warnings`.
 5. Register cameras with real RTSP URLs and enable them; watch `camera.status`
@@ -288,8 +291,11 @@ is intended for development (`CV_RUNNER_ENABLED=true` with `CV_ENABLED=true`).
 ## 8. Extending the pipeline
 
 * **New plate detector:** implement the `PlateDetector` protocol
-  (`detect(image) -> list[Detection]`), register it in
-  `app/cv/detectors/__init__.py`, select it with `CV_PLATE_DETECTOR`.
+  (`detect(image) -> list[Detection]`), export it from
+  `app/cv/detectors/__init__.py`, select it with `CV_PLATE_DETECTOR`
+  (`yolo` → Ultralytics `.pt`, `onnx` → `cv2.dnn`). Class labels are normalised
+  by `app.cv.detectors.yolo_plate.normalise_class_name`, so `License Plate`,
+  `license-plate` and `لوحة سيارة` all match `CV_PLATE_CLASS_NAMES`.
 * **New OCR:** implement `PlateReader.read(image, bbox) -> PlateReading | None`.
 * **New face model:** implement `FaceDetector.detect()` returning `FaceDetection`
   objects with normalised embeddings; the gallery math is model-agnostic.
