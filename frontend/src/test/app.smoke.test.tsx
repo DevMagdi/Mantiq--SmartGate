@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -295,6 +297,75 @@ describe("GateVision dashboard", () => {
     ).toBeTruthy();
     expect(await screen.findByRole("tab", { name: /gates/i })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: /users/i })).toBeNull();
+  });
+
+  it("previews a camera snapshot over the authenticated endpoint", async () => {
+    await signIn("admin");
+    renderAt("/settings");
+
+    await screen.findByRole("heading", { name: /^settings$/i }, { timeout: 20_000 });
+    (await screen.findByRole("tab", { name: /cameras/i })).click();
+    const cameraName = await screen.findByText("Entry Lane Camera", {}, { timeout: 20_000 });
+    const row = cameraName.closest("tr");
+    expect(row).toBeTruthy();
+    within(row as HTMLElement).getByRole("button", { name: /^snapshot$/i }).click();
+
+    // The seeded demo cameras have no live frame: the modal must explain the
+    // backend reason instead of showing a broken <img>.
+    expect(
+      await screen.findByText(/could not read a snapshot/i, {}, { timeout: 20_000 }),
+    ).toBeTruthy();
+    expect(await screen.findByText(/no live snapshot/i, {}, { timeout: 20_000 })).toBeTruthy();
+  });
+
+  it("edits an issued permit from the permits table", async () => {
+    await signIn("admin");
+    renderAt("/visitors");
+
+    await screen.findByRole("heading", { name: /visitors & permits/i }, { timeout: 20_000 });
+    (await screen.findByRole("tab", { name: /permits/i })).click();
+    const permitRows = await screen.findAllByText(/PMT-/, {}, { timeout: 20_000 });
+    expect(permitRows.length).toBeGreaterThan(0);
+
+    screen.getAllByRole("button", { name: /^edit$/i })[0].click();
+    expect(await screen.findByText(/edit permit/i, {}, { timeout: 20_000 })).toBeTruthy();
+
+    const entries = screen.getByLabelText(/maximum entries/i);
+    fireEvent.change(entries, { target: { value: "3" } });
+    screen.getByRole("button", { name: /save changes/i }).click();
+
+    expect(await screen.findByText(/permit updated/i, {}, { timeout: 20_000 })).toBeTruthy();
+  });
+
+  it("screens an enrollment photo through the quality-check endpoint", async () => {
+    await signIn("admin");
+    renderAt("/security");
+
+    await screen.findByRole("heading", { name: /blacklist & face recognition/i }, {
+      timeout: 20_000,
+    });
+    (await screen.findByRole("button", { name: /enroll face/i })).click();
+
+    await screen.findByLabelText(/^resident/i, {}, { timeout: 20_000 });
+    await waitFor(
+      () => {
+        const select = screen.getByLabelText(/^resident/i) as HTMLSelectElement;
+        expect(select.options.length).toBeGreaterThan(1);
+      },
+      { timeout: 20_000 },
+    );
+    const residentSelect = screen.getByLabelText(/^resident/i) as HTMLSelectElement;
+    fireEvent.change(residentSelect, { target: { value: residentSelect.options[1].value } });
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const bytes = readFileSync(resolve(process.cwd(), "src/test/fixtures/sample-face.jpg"));
+    const file = new File([new Uint8Array(bytes)], "face.jpg", { type: "image/jpeg" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    // Either verdict is fine — what matters is that the report from the API is rendered.
+    expect(
+      await screen.findByText(/quality check/i, {}, { timeout: 20_000 }),
+    ).toBeTruthy();
   });
 
   it("scopes the resident experience to their household", async () => {

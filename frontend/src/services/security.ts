@@ -6,6 +6,7 @@ import type {
   BlacklistReason,
   FaceEmbedding,
   FaceGalleryInfo,
+  FaceQualityReport,
 } from "@/types/models";
 
 export interface BlacklistPayload {
@@ -61,6 +62,22 @@ export async function enrollFace(
   form.append("overwrite", String(overwrite));
   form.append("file", file);
   const { data } = await api.post<FaceEmbedding>("/faces/enroll", form);
+  return data;
+}
+
+/**
+ * Pre-flight a photo before enrollment. Nothing is persisted; the API returns
+ * the score, every failed check and the compound thresholds so the modal can
+ * explain exactly what to fix.
+ */
+export async function checkFaceQuality(
+  residentId: string,
+  file: File,
+): Promise<FaceQualityReport> {
+  const form = new FormData();
+  form.append("resident_id", residentId);
+  form.append("file", file);
+  const { data } = await api.post<FaceQualityReport>("/faces/quality-check", form);
   return data;
 }
 

@@ -85,9 +85,19 @@ export async function revokePermit(id: string, reason: string): Promise<Permit> 
   return data;
 }
 
+export interface PermitUpdatePayload {
+  status?: PermitStatus;
+  notes?: string | null;
+  max_entries?: number;
+  permit_type?: PermitType;
+  start_at?: string;
+  end_at?: string;
+  vehicle_id?: string | null;
+}
+
 export async function updatePermit(
   id: string,
-  payload: { status?: PermitStatus; notes?: string | null; max_entries?: number },
+  payload: PermitUpdatePayload,
 ): Promise<Permit> {
   const { data } = await api.patch<Permit>(`/permits/${id}`, payload);
   return data;

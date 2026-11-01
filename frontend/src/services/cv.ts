@@ -1,4 +1,4 @@
-import { api } from "@/services/api";
+import { api, apiErrorMessage } from "@/services/api";
 import type { MessageResponse } from "@/types/api";
 import type {
   ActuatorStatusResponse,
@@ -59,6 +59,54 @@ export async function testCameraStream(cameraId: string): Promise<CameraProbeRes
 
 export function cameraSnapshotUrl(cameraId: string): string {
   return `/cv/cameras/${cameraId}/snapshot`;
+}
+
+/**
+ * Grab one live JPEG frame. The endpoint is manager-only, so an <img> tag
+ * cannot authenticate — fetch the blob through the API client and render it
+ * with an object URL instead.
+ */
+export async function fetchCameraSnapshot(cameraId: string): Promise<Blob> {
+  try {
+    // Response type "arraybuffer" (not "blob") so that a JSON error body can be
+    // decoded on failure — with "blob" some HTTP stacks hand back a blob that
+    // has no text()/arrayBuffer() helper, hiding the server's message.
+    const { data } = await api.get<ArrayBuffer>(cameraSnapshotUrl(cameraId), {
+      responseType: "arraybuffer",
+      timeout: 20_000,
+    });
+    return new Blob([data], { type: "image/jpeg" });
+  } catch (error) {
+    throw new Error(await snapshotErrorMessage(error));
+  }
+}
+
+async function snapshotErrorMessage(error: unknown): Promise<string> {
+  const fallback = apiErrorMessage(error);
+  const body = (error as { response?: { data?: unknown } } | null)?.response?.data;
+  let raw: string | null = null;
+  if (typeof body === "string") {
+    raw = body;
+  } else if (body instanceof ArrayBuffer) {
+    raw = new TextDecoder().decode(body);
+  } else if (ArrayBuffer.isView(body)) {
+    raw = new TextDecoder().decode(body);
+  } else if (body instanceof Blob) {
+    try {
+      raw = await body.text();
+    } catch {
+      raw = null;
+    }
+  } else if (body && typeof (body as { error?: unknown }).error === "object") {
+    raw = JSON.stringify(body);
+  }
+  if (!raw) return fallback;
+  try {
+    const message = (JSON.parse(raw) as { error?: { message?: unknown } })?.error?.message;
+    return typeof message === "string" && message ? message : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function fetchWorkers(): Promise<Record<string, unknown>> {

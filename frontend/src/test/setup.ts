@@ -47,6 +47,13 @@ class StubWebSocket {
 }
 
 vi.stubGlobal("ResizeObserver", StubResizeObserver);
+
+/** jsdom has no blob URLs; the camera snapshot preview depends on them. */
+if (typeof URL.createObjectURL !== "function") {
+  let counter = 0;
+  URL.createObjectURL = () => `blob:jsdom/${++counter}`;
+  URL.revokeObjectURL = () => undefined;
+}
 vi.stubGlobal("WebSocket", StubWebSocket);
 window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
 

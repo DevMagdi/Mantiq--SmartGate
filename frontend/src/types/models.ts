@@ -483,6 +483,28 @@ export interface FaceEmbedding {
   similarity_to_existing: number | null;
 }
 
+/** One enrollment pre-flight check returned by ``POST /faces/quality-check``. */
+export interface FaceQualityIssue {
+  code: string;
+  message: string;
+  severity: "error" | "warning" | string;
+  hint: string | null;
+}
+
+export interface FaceQualityReport {
+  passed: boolean;
+  score: number;
+  face_count: number;
+  width: number;
+  height: number;
+  face_ratio: number;
+  blur: number;
+  brightness: number;
+  duplicate_similarity: number | null;
+  issues: FaceQualityIssue[];
+  thresholds: Record<string, unknown>;
+}
+
 export interface FaceGalleryInfo {
   total_embeddings: number;
   active_embeddings: number;

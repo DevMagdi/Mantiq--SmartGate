@@ -33,14 +33,16 @@ import {
   listPermits,
   listVisitors,
   revokePermit,
+  updatePermit,
+  uploadVisitorPhoto,
   visitorAction,
   type PermitPayload,
   type VisitorPayload,
 } from "@/services/visitors";
-import { apiErrorMessage } from "@/services/api";
+import { apiErrorMessage, mediaUrl } from "@/services/api";
 import type { Permit, Visitor, VisitorStatus } from "@/types/models";
 import { PERMIT_STATUS_META, VISITOR_STATUS_META } from "@/utils/constants";
-import { formatDateTime, plusHours, toDateTimeLocal } from "@/utils/format";
+import { formatDateTime, initials, plusHours, toDateTimeLocal } from "@/utils/format";
 
 type TabKey = "visitors" | "permits";
 type VisitorAction = "approve" | "reject" | "check-in" | "check-out";
@@ -105,7 +107,18 @@ export function VisitorsPage(): JSX.Element {
 
   const [visitorOpen, setVisitorOpen] = useState(false);
   const [visitorForm, setVisitorForm] = useState<VisitorForm>(EMPTY_VISITOR);
+  const [visitorPhoto, setVisitorPhoto] = useState<File | null>(null);
+  const [visitorPhotoPreview, setVisitorPhotoPreview] = useState<string | null>(null);
+
+  const clearVisitorPhoto = (): void => {
+    setVisitorPhoto(null);
+    setVisitorPhotoPreview((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
+  };
   const [permitOpen, setPermitOpen] = useState(false);
+  const [editingPermit, setEditingPermit] = useState<Permit | null>(null);
   const [permitForm, setPermitForm] = useState<PermitForm>(EMPTY_PERMIT);
   const [permitToRevoke, setPermitToRevoke] = useState<Permit | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
@@ -164,7 +177,7 @@ export function VisitorsPage(): JSX.Element {
   };
 
   const createVisitorMutation = useMutation({
-    mutationFn: async (): Promise<void> => {
+    mutationFn: async (): Promise<{ photoFailed: boolean }> => {
       if (!compound && isManager) throw new Error(t("visitors.error.no_compound"));
       const payload: VisitorPayload = {
         compound_id: compound?.id ?? myProfile.data?.compound_id ?? "",
@@ -177,15 +190,29 @@ export function VisitorsPage(): JSX.Element {
         expected_arrival: visitorForm.expected_arrival ? new Date(visitorForm.expected_arrival).toISOString() : null,
         notes: visitorForm.notes.trim() || null,
       };
-      await createVisitor(payload);
+      const visitor = await createVisitor(payload);
+      // The photo is a separate multipart endpoint; a failure must not lose the
+      // visitor that was just registered.
+      if (visitorPhoto) {
+        try {
+          await uploadVisitorPhoto(visitor.id, visitorPhoto);
+        } catch {
+          return { photoFailed: true };
+        }
+      }
+      return { photoFailed: false };
     },
-    onSuccess: async () => {
+    onSuccess: async ({ photoFailed }) => {
+      if (photoFailed) {
+        toast.error(t("visitors.toast.photo_failed"), t("visitors.toast.photo_failed_hint"));
+      }
       toast.success(
         t("visitors.toast.created"),
         isManager ? t("visitors.toast.created_hint_manager") : t("visitors.toast.created_hint_resident"),
       );
       setVisitorOpen(false);
       setVisitorForm(EMPTY_VISITOR);
+      clearVisitorPhoto();
       await invalidate();
     },
     onError: (error) => toast.error(t("visitors.toast.create_error"), apiErrorMessage(error)),
@@ -204,21 +231,34 @@ export function VisitorsPage(): JSX.Element {
   const permitMutation = useMutation({
     mutationFn: async (): Promise<void> => {
       const visitor = visitorDirectory.data?.items.find((item) => item.id === permitForm.visitor_id);
-      const payload: PermitPayload = {
-        visitor_id: permitForm.visitor_id,
-        host_unit_id: permitForm.host_unit_id || visitor?.host_unit_id || defaultUnitId,
+      const shared = {
         start_at: new Date(permitForm.start_at).toISOString(),
         end_at: new Date(permitForm.end_at).toISOString(),
         permit_type: permitForm.permit_type as PermitPayload["permit_type"],
         max_entries: Number(permitForm.max_entries) || 1,
-        vehicle_plate: permitForm.vehicle_plate.trim() || null,
         notes: permitForm.notes.trim() || null,
       };
-      await createPermit(payload);
+      if (editingPermit) {
+        // Permits keep their visitor/unit/plate once issued — only the window,
+        // type, entry allowance and notes are editable.
+        await updatePermit(editingPermit.id, shared);
+        return;
+      }
+      await createPermit({
+        ...shared,
+        visitor_id: permitForm.visitor_id,
+        host_unit_id: permitForm.host_unit_id || visitor?.host_unit_id || defaultUnitId,
+        vehicle_plate: permitForm.vehicle_plate.trim() || null,
+      });
     },
     onSuccess: async () => {
-      toast.success(t("visitors.toast.permit_issued"), t("visitors.toast.permit_issued_hint"));
+      if (editingPermit) {
+        toast.success(t("visitors.toast.permit_updated"), t("visitors.toast.permit_updated_hint"));
+      } else {
+        toast.success(t("visitors.toast.permit_issued"), t("visitors.toast.permit_issued_hint"));
+      }
       setPermitOpen(false);
+      setEditingPermit(null);
       setPermitForm(EMPTY_PERMIT);
       await invalidate();
     },
@@ -241,10 +281,26 @@ export function VisitorsPage(): JSX.Element {
   };
 
   const openPermitModal = (visitor?: Visitor): void => {
+    setEditingPermit(null);
     setPermitForm({
       ...EMPTY_PERMIT,
       visitor_id: visitor?.id ?? "",
       host_unit_id: visitor?.host_unit_id ?? defaultUnitId,
+    });
+    setPermitOpen(true);
+  };
+
+  const openPermitEditor = (permit: Permit): void => {
+    setEditingPermit(permit);
+    setPermitForm({
+      visitor_id: permit.visitor_id,
+      host_unit_id: permit.host_unit_id,
+      start_at: toDateTimeLocal(new Date(permit.start_at)),
+      end_at: toDateTimeLocal(new Date(permit.end_at)),
+      permit_type: permit.permit_type,
+      max_entries: String(permit.max_entries),
+      vehicle_plate: permit.vehicle_plate ?? "",
+      notes: permit.notes ?? "",
     });
     setPermitOpen(true);
   };
@@ -326,8 +382,24 @@ export function VisitorsPage(): JSX.Element {
                     return (
                       <tr key={visitor.id} className="transition hover:bg-ink-50/70 dark:hover:bg-ink-800/30">
                         <Td>
-                          <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{visitor.full_name}</p>
-                          <p className="text-[10px] text-ink-400">{visitor.phone ?? visitor.email ?? t("common.no_contact")}</p>
+                          <div className="flex items-center gap-2.5">
+                            {mediaUrl(visitor.photo_url) ? (
+                              <img
+                                src={mediaUrl(visitor.photo_url)!}
+                                alt={t("visitors.form.photo_preview")}
+                                className="h-9 w-9 rounded-full border border-ink-200 object-cover dark:border-ink-700"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span className="grid h-9 w-9 place-items-center rounded-full bg-ink-100 text-[11px] font-bold text-ink-500 dark:bg-ink-800 dark:text-ink-300">
+                                {initials(visitor.full_name)}
+                              </span>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{visitor.full_name}</p>
+                              <p className="text-[10px] text-ink-400">{visitor.phone ?? visitor.email ?? t("common.no_contact")}</p>
+                            </div>
+                          </div>
                         </Td>
                         <Td className="text-xs">{visitor.host_unit?.label ?? "—"}</Td>
                         <Td className="max-w-[220px] truncate text-xs">{visitor.purpose ?? "—"}</Td>
@@ -438,6 +510,7 @@ export function VisitorsPage(): JSX.Element {
                             {permit.status === "active" || permit.status === "pending" ? (
                               <>
                                 <Button size="sm" variant="ghost" icon="visitors" onClick={() => actionMutation.mutate({ visitorId: permit.visitor_id, action: "check-in" })}>{t("visitors.action.check_in")}</Button>
+                                <Button size="sm" variant="ghost" icon="edit" onClick={() => openPermitEditor(permit)}>{t("common.edit")}</Button>
                                 <Button size="sm" variant="ghost" icon="x" onClick={() => { setPermitToRevoke(permit); setRevokeReason(t("visitors.revoke.default_reason")); }}>{t("visitors.action.revoke")}</Button>
                               </>
                             ) : (
@@ -508,15 +581,48 @@ export function VisitorsPage(): JSX.Element {
             onChange={(event) => setVisitorForm({ ...visitorForm, expected_arrival: event.target.value })}
           />
           <Input label={t("visitors.table.purpose")} value={visitorForm.purpose} onChange={(event) => setVisitorForm({ ...visitorForm, purpose: event.target.value })} placeholder={t("visitors.form.purpose_placeholder")} className="sm:col-span-2" />
+          <div className="sm:col-span-2">
+            <label className="field-label" htmlFor="visitor-photo">{t("visitors.form.photo")}</label>
+            <div className="flex items-center gap-3">
+              {visitorPhotoPreview ? (
+                <img
+                  src={visitorPhotoPreview}
+                  alt={t("visitors.form.photo_preview")}
+                  className="h-16 w-16 rounded-xl border border-ink-200 object-cover dark:border-ink-700"
+                />
+              ) : (
+                <span className="grid h-16 w-16 place-items-center rounded-xl border border-dashed border-ink-300 text-ink-400 dark:border-ink-700">
+                  <Icon name="camera" className="h-5 w-5" />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <input
+                  id="visitor-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    setVisitorPhoto(file);
+                    setVisitorPhotoPreview((current) => {
+                      if (current) URL.revokeObjectURL(current);
+                      return file ? URL.createObjectURL(file) : null;
+                    });
+                  }}
+                  className="block w-full cursor-pointer rounded-xl border border-dashed border-ink-300 bg-ink-50/60 px-3 py-2 text-xs text-ink-500 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-50 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-brand-700 dark:border-ink-700 dark:bg-ink-950/40 dark:text-ink-400 dark:file:bg-brand-500/10 dark:file:text-brand-300"
+                />
+                <p className="mt-1 text-[11px] text-ink-400">{t("visitors.form.photo_hint")}</p>
+              </div>
+            </div>
+          </div>
           <Textarea label={t("common.notes")} value={visitorForm.notes} onChange={(event) => setVisitorForm({ ...visitorForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={permitOpen}
-        onClose={() => setPermitOpen(false)}
-        title={t("visitors.permit.issue_title")}
-        description={t("visitors.permit.issue_desc")}
+        onClose={() => { setPermitOpen(false); setEditingPermit(null); }}
+        title={editingPermit ? t("visitors.permit.edit_title") : t("visitors.permit.issue_title")}
+        description={editingPermit ? t("visitors.permit.edit_desc") : t("visitors.permit.issue_desc")}
         size="lg"
         footer={
           <>
@@ -524,9 +630,14 @@ export function VisitorsPage(): JSX.Element {
             <Button
               onClick={() => permitMutation.mutate()}
               loading={permitMutation.isPending}
-              disabled={!permitForm.visitor_id || !permitForm.start_at || !permitForm.end_at}
+              disabled={
+                !permitForm.visitor_id ||
+                !permitForm.start_at ||
+                !permitForm.end_at ||
+                (!editingPermit && !(permitForm.host_unit_id || defaultUnitId))
+              }
             >
-              {t("visitors.issue_permit")}
+              {editingPermit ? t("common.save_changes") : t("visitors.issue_permit")}
             </Button>
           </>
         }
@@ -545,6 +656,7 @@ export function VisitorsPage(): JSX.Element {
               });
             }}
             className="sm:col-span-2"
+            disabled={editingPermit !== null}
           >
             <option value="">{t("visitors.form.select_visitor")}</option>
             {(visitorDirectory.data?.items ?? [])
@@ -559,6 +671,7 @@ export function VisitorsPage(): JSX.Element {
             label={t("visitors.table.unit")}
             value={permitForm.host_unit_id || defaultUnitId}
             onChange={(event) => setPermitForm({ ...permitForm, host_unit_id: event.target.value })}
+            disabled={editingPermit !== null}
           >
             <option value="">{t("visitors.form.select_unit")}</option>
             {unitOptions.map((unit) => (
@@ -581,6 +694,7 @@ export function VisitorsPage(): JSX.Element {
             onChange={(event) => setPermitForm({ ...permitForm, vehicle_plate: event.target.value.toUpperCase() })}
             placeholder={t("visitors.form.vehicle_placeholder")}
             className="font-mono"
+            disabled={editingPermit !== null}
           />
           <Textarea label={t("common.notes")} value={permitForm.notes} onChange={(event) => setPermitForm({ ...permitForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>

@@ -48,7 +48,7 @@ import {
   type UserPayload,
 } from "@/services/admin";
 import { apiErrorMessage } from "@/services/api";
-import { fetchRealModeStatus, testCameraStream } from "@/services/cv";
+import { fetchCameraSnapshot, fetchRealModeStatus, testCameraStream } from "@/services/cv";
 import type {
   Camera,
   CameraProbeResult,
@@ -113,6 +113,7 @@ export function SettingsPage(): JSX.Element {
   const [probe, setProbe] = useState<{ camera: Camera; result: CameraProbeResult | null } | null>(
     null,
   );
+  const [snapshotCamera, setSnapshotCamera] = useState<Camera | null>(null);
   const realMode = useQuery({
     queryKey: ["cv-real-mode"],
     queryFn: fetchRealModeStatus,
@@ -620,6 +621,14 @@ export function SettingsPage(): JSX.Element {
                           <Button
                             size="sm"
                             variant="subtle"
+                            icon="camera"
+                            onClick={() => setSnapshotCamera(camera)}
+                          >
+                            {t("settings.action.snapshot")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="subtle"
                             icon="play"
                             onClick={() => probeMutation.mutate(camera)}
                             loading={probeMutation.isPending && probeMutation.variables?.id === camera.id}
@@ -1014,6 +1023,8 @@ export function SettingsPage(): JSX.Element {
         )}
       </Modal>
 
+      <CameraSnapshotModal camera={snapshotCamera} onClose={() => setSnapshotCamera(null)} />
+
       <ConfirmDialog
         open={gateToDelete !== null}
         onClose={() => setGateToDelete(null)}
@@ -1044,5 +1055,86 @@ export function SettingsPage(): JSX.Element {
         confirmLabel={t("settings.deactivate.confirm")}
       />
     </div>
+  );
+}
+
+/**
+ * Live snapshot preview for a camera.
+ *
+ * `GET /cv/cameras/{id}/snapshot` is authenticated (manager only), so a plain
+ * `<img src>` would 401 — the JPEG is fetched as a blob and rendered through an
+ * object URL that is revoked whenever a new frame arrives or the modal closes.
+ */
+function CameraSnapshotModal({ camera, onClose }: { camera: Camera | null; onClose: () => void }) {
+  const { t } = useI18n();
+  const [live, setLive] = useState(true);
+  const [url, setUrl] = useState<string | null>(null);
+
+  const snapshot = useQuery({
+    queryKey: ["camera-snapshot", camera?.id],
+    queryFn: () => fetchCameraSnapshot(camera!.id),
+    enabled: camera !== null,
+    retry: false,
+    gcTime: 0,
+    refetchInterval: live ? 5_000 : false,
+  });
+
+  useEffect(() => {
+    setUrl(null);
+    const blob = snapshot.data;
+    if (!blob) return undefined;
+    const next = URL.createObjectURL(blob);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [snapshot.data]);
+
+  return (
+    <Modal
+      open={camera !== null}
+      onClose={onClose}
+      title={t("settings.snapshot.title")}
+      description={camera ? `${camera.name} · ${camera.position}` : undefined}
+      footer={
+        <>
+          <label className="me-auto flex items-center gap-2 text-xs text-ink-600 dark:text-ink-300">
+            <input
+              type="checkbox"
+              checked={live}
+              onChange={(event) => setLive(event.target.checked)}
+              className="h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
+            />
+            {t("settings.snapshot.live")}
+          </label>
+          <Button variant="outline" icon="refresh" onClick={() => void snapshot.refetch()} loading={snapshot.isFetching}>
+            {t("common.refresh")}
+          </Button>
+          <Button onClick={onClose}>{t("common.close")}</Button>
+        </>
+      }
+    >
+      {snapshot.isLoading ? (
+        <LoadingBlock />
+      ) : snapshot.isError ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+          <p className="font-semibold">{t("settings.snapshot.failed")}</p>
+          <p className="mt-1 leading-relaxed">{apiErrorMessage(snapshot.error)}</p>
+        </div>
+      ) : url ? (
+        <div className="space-y-2">
+          <img
+            src={url}
+            alt={t("settings.snapshot.preview")}
+            className="w-full rounded-xl border border-ink-200 bg-ink-900 object-contain dark:border-ink-700"
+          />
+          <p className="text-[11px] text-ink-500 dark:text-ink-400">
+            {t("settings.snapshot.captured", {
+              time: formatDateTime(new Date(snapshot.dataUpdatedAt).toISOString()),
+            })}
+          </p>
+        </div>
+      ) : (
+        <p className="text-xs text-ink-500 dark:text-ink-400">{t("settings.snapshot.empty")}</p>
+      )}
+    </Modal>
   );
 }
