@@ -264,11 +264,18 @@ The most important variables:
 | `CV_MODE` | `mock` | `mock` or `real` |
 | `CV_RUNNER_ENABLED` | `true` | In-process camera workers |
 | `CV_PLATE_MODEL_PATH` | `models/plate_yolov8.pt` | YOLO weights |
+| `CV_YOLO_IMAGE_SIZE` / `CV_YOLO_IOU` | 640 / 0.45 | Detector input + NMS |
+| `CV_YOLO_DEVICE` / `CV_YOLO_HALF` | auto / `false` | `cpu`, `0`, `cuda:1`; FP16 on GPU |
 | `CV_OCR_ENGINE` | `easyocr` | `easyocr` \| `paddleocr` |
+| `CV_OCR_ALLOWLIST` | `true` | constrain OCR to plate characters |
 | `CV_FACE_SIMILARITY_THRESHOLD` | 0.45 | Face match threshold |
 | `CV_DEDUPE_SECONDS` | 8 | Duplicate suppression window |
+| `BARRIER_DRIVER` | `simulator` | `simulator` \| `webhook` \| `mqtt` \| `gpio` |
+| `BARRIER_WEBHOOK_URL` / `_SECRET` | empty | Controller URL + HMAC secret |
 | `MEDIA_ROOT` / `MEDIA_URL` | `backend/media` / `/media` | Snapshots |
-| `RETENTION_DAYS` | 365 | Access log / media retention |
+| `RETENTION_DAYS` | 365 | Detections + media retention |
+| `RETENTION_ACCESS_LOG_DAYS` | 730 | Audit-trail retention (longer) |
+| `RETENTION_BATCH_SIZE` / `_MAX_BATCHES` | 5000 / 200 | Batched deletes per cycle |
 | `MAINTENANCE_ENABLED` | `true` | In-process retention loop |
 
 See [.env.example](.env.example) for the complete list with comments.
@@ -318,14 +325,77 @@ navigation behave.
 
 - **Migrations:** `alembic upgrade head` (run automatically by the API container);
   `alembic check` verifies models match the schema.
-- **Retention:** permits/visitors expire, detections/logs older than
-  `RETENTION_DAYS` are purged, orphaned media is removed. Run `python -m app.tasks`
-  from cron if you disable the in-process loop.
-- **Health:** `GET /api/v1/health` (liveness) and `/health/ready` (DB + Redis).
-- **Logs:** structured text or JSON (`LOG_FORMAT`), request ids on every response.
+- **Retention:** permits/visitors expire, detections/snapshots older than
+  `RETENTION_DAYS` and access logs older than `RETENTION_ACCESS_LOG_DAYS` are
+  purged in batches (a backlog drains over several cycles instead of locking the
+  table). `python -m app.tasks.maintenance --dry-run` previews a cleanup;
+  `--once` is the cron entry point when you disable the in-process loop.
+- **Health:** `GET /api/v1/health` (liveness), `/health/live` (alias) and
+  `/health/ready` (DB/Redis + vision engine, barrier driver, maintenance state).
+- **Metrics:** `GET /metrics` — Prometheus counters/histograms/gauges for HTTP,
+  decisions, barrier commands, vision outcomes, enrollments and maintenance.
+- **Logs:** structured text or JSON (`LOG_FORMAT`), request ids on every response;
+  every barrier command logs driver, latency and outcome.
 - **Backups:** PostgreSQL + the media volume are the only stateful components.
 - **Scaling:** run several `api` replicas behind the nginx container; Redis fan-out
   keeps every WebSocket subscriber in sync. Scale `cv-worker` by camera count/GPU.
+
+---
+
+## Going to Production
+
+The demo path (`CV_MODE=mock`, SQLite, seeded accounts) is not production. Use the
+three runbooks below; they are written to be followed in order.
+
+1. **[docs/deployment.md](docs/deployment.md)** — the checklist: secrets, TLS and
+   reverse proxy, database migrations/backups, container hardening, health probes,
+   Prometheus alerts, go-live smoke test and rollback plan. The API itself refuses
+   to boot in production with a placeholder `SECRET_KEY`, `DEBUG=true` or a
+   wildcard `CORS_ORIGINS`.
+2. **[docs/rtsp-cameras.md](docs/rtsp-cameras.md)** — move `CV_MODE=mock` to
+   `CV_MODE=real`: camera placement/encoding, model weights (including
+   fine-tuning a plate model on Egyptian plates), per-compound thresholds,
+   shadow mode, and the camera troubleshooting table.
+3. **[docs/hardware.md](docs/hardware.md)** — connect the barrier: signed HTTP
+   webhook, MQTT or GPIO relay, with verification snippets, retry semantics and
+   driver health/command journal.
+
+Then prepare the data:
+
+- **[docs/face-enrollment.md](docs/face-enrollment.md)** — resident/vehicle
+  registration, the enrollment quality gates (and how to read each rejection),
+  gallery pruning and biometric erasure.
+- Configure barricade policy per compound in **Settings → Gate policy** or
+  `PATCH /api/v1/compounds/{id}/settings` (vision thresholds, access rules,
+  barrier driver). Secrets are masked on read and round-trip safely.
+
+Minimum production configuration:
+
+```bash
+ENVIRONMENT=production
+DEBUG=false
+SECRET_KEY=$(openssl rand -hex 32)      # 64 chars
+DATABASE_URL=postgresql+asyncpg://…
+REDIS_ENABLED=true
+CORS_ORIGINS=["https://gates.example.com"]
+TRUSTED_HOSTS=["gates.example.com"]
+SEED_DEMO_DATA=false
+CV_MODE=real
+CV_RUNNER_ENABLED=false                 # run `python -m app.cv.runner` as cv-worker
+BARRIER_DRIVER=webhook
+BARRIER_WEBHOOK_URL=https://controller.lan/api/barrier
+BARRIER_WEBHOOK_SECRET=…
+LOG_FORMAT=json
+```
+
+Verify after deploy:
+
+```bash
+curl -s https://gates.example.com/api/v1/health/ready | jq '.status, .checks'
+curl -s https://gates.example.com/api/v1/cv/status -H "Authorization: Bearer $TOKEN" | jq
+curl -s https://gates.example.com/api/v1/cv/actuators -H "Authorization: Bearer $TOKEN" | jq
+curl -s https://gates.example.com/metrics | grep gatevision_cv_engine_ready
+```
 
 ---
 
@@ -339,6 +409,11 @@ navigation behave.
 - Face embeddings are biometric data: never returned by the API, deactivated rather
   than silently replaced, deletable for erasure requests.
 - Blacklist hits always deny and never open the barrier.
+- Barrier secrets (webhook HMAC, MQTT password) are masked (`********`) by the API
+  and never written to logs; webhook commands carry a timestamp+body HMAC the
+  controller must verify (see `docs/hardware.md`).
+- Production startup validates the security posture (secret length/placeholder,
+  wildcard CORS, DEBUG, unrestricted hosts) and refuses to run with fatal issues.
 
 ---
 
@@ -352,6 +427,9 @@ navigation behave.
 | Seed says “skipped” | The demo compound already exists; use `python -m app.cli seed` for details or a fresh database. |
 | Excel export empty | Filters matched no rows or exceeded `EXPORT_ROW_LIMIT`; widen the range. |
 | Camera `error` status | RTSP unreachable/expired credentials; check `last_error` on the camera row. |
+| Barrier command `accepted=false` | driver unreachable or signature rejected; open **Live monitor → Barrier actuator** or `GET /cv/actuators` for the exact error. |
+| Enrolment rejected with `enrollment_rejected` | photo failed a quality gate; the response `details.issues` lists each problem with a hint. |
+| `/metrics` 404 | reverse proxy not routing it; see `docs/deployment.md` §4. |
 
 ---
 
@@ -362,3 +440,7 @@ navigation behave.
 | [docs/architecture.md](docs/architecture.md) | Processes, data model, request/detection flows, RBAC, ops |
 | [docs/api.md](docs/api.md) | REST reference, filters, errors, WebSocket protocol |
 | [docs/cv-pipeline.md](docs/cv-pipeline.md) | Detectors, thresholds, decision matrix, real-mode checklist |
+| [docs/rtsp-cameras.md](docs/rtsp-cameras.md) | Connecting real RTSP cameras, plate models, tuning, go-live |
+| [docs/face-enrollment.md](docs/face-enrollment.md) | Enrollment quality gates, gallery pruning, vehicle registration |
+| [docs/hardware.md](docs/hardware.md) | Barrier drivers: webhook HMAC, MQTT, GPIO wiring and troubleshooting |
+| [docs/deployment.md](docs/deployment.md) | Production checklist: secrets, probes, metrics, alerts, rollback |

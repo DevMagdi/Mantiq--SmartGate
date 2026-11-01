@@ -184,6 +184,26 @@ and the access log records the barrier state.
 | `CV_DEDUPE_SECONDS` | 8 | Duplicate suppression window |
 | `CV_FRAME_WIDTH` | 1280 | Frames are resized before inference |
 | `CV_SNAPSHOT_QUALITY` | 85 | JPEG quality for stored crops |
+| `CV_YOLO_IMAGE_SIZE` | 640 | Detector input resolution |
+| `CV_YOLO_IOU` | 0.45 | NMS IoU for the detector |
+| `CV_YOLO_DEVICE` | auto | `cpu`, `0`, `cuda:1` (empty = let Ultralytics choose) |
+| `CV_YOLO_HALF` | false | FP16 inference on CUDA |
+| `CV_OCR_ALLOWLIST` | true | Constrain EasyOCR to plate characters |
+
+### Per-compound overrides
+
+Every value above can be overridden per compound without a restart:
+
+```bash
+curl -X PATCH .../api/v1/compounds/$ID/settings -H "Authorization: Bearer $ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{"vision": {"face_similarity_threshold": 0.48,
+                  "plate_confidence_threshold": 0.4,
+                  "max_embeddings_per_resident": 4}}'
+```
+
+The camera workers reload the policy every few seconds; the upload endpoint
+(`/cv/analyze`) reads it per request. See `docs/api.md` §3.2 for the full document.
 
 Raising the face threshold reduces false accepts (faster entry for known residents but
 more `review`s); lowering it increases convenience at the cost of security. Calibrate
@@ -203,6 +223,44 @@ against your own enrollment photos — the bundled seed gallery is synthetic.
 URLs are relative (`/media/...`) and served by the API (`StaticFiles`) or nginx. The
 retention job deletes files older than `RETENTION_DAYS` and removes rows whose files
 disappeared.
+
+---
+
+## 6b. Egyptian plate normalisation
+
+`app/cv/plate_rules.py` turns raw OCR text into a comparable key:
+
+* Arabic → Latin transliteration (`ب ج ١٢٣٤` → `BG1234`), including
+  Arabic-Indic digits (`٠١٢٣٤٥٦٧٨٩`) and the letter forms that OCR confuses
+  (`أ/إ/آ` → `A`, `ى` → `Y`, `ة` → `H`).
+* Re-ordering: Egyptian plates are printed with the digits before the letters in
+  some series and after in others, so the canonical form is always
+  *letters + digits*; `4821 ABC` and `ABC 4821` normalise to the same key.
+* Governorate codes (`CAI`, `GZ`, `ALX`, …) are recognised and kept as a suffix.
+* Confusion-aware variants (`0/O`, `1/I`, `2/Z`, `5/S`, `8/B`, `6/G`, `4/A`) are
+  generated for database lookups, capped at 32 keys so a query stays cheap.
+* `plate_similarity()` and `best_plate_match()` let the API suggest the closest
+  registered plate when a read is ambiguous (used by the review flow).
+
+Validation (`parse_plate`) rejects non-plate strings early, and the decision
+engine always queries by variants instead of raw text.
+
+---
+
+## 6c. Enrollment quality gates
+
+`app/cv/quality.py` scores a photo **before** an embedding is stored:
+resolution, single-face, face-size ratio, blur (variance of Laplacian), exposure
+and duplicate similarity. Rejections return `enrollment_rejected` with a list of
+actionable issues (code, message, severity, hint). The same code powers
+`POST /faces/quality-check`, so an operator can test a photo without storing
+anything. Thresholds come from the compound vision policy
+(`face_min_quality`, `face_min_blur`, `face_min_resolution`,
+`max_embeddings_per_resident`, `duplicate_similarity_threshold`).
+
+Gallery hygiene: `POST /faces/prune` keeps the best-scoring embeddings per
+resident (dry-run by default in the dashboard) and deactivates the rest instead
+of deleting rows.
 
 ---
 

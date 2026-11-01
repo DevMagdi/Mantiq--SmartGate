@@ -76,16 +76,20 @@ app/
 │   ├── middleware.py    request id, timing, access logs, exception mapping
 │   └── routes/          one module per resource; no business logic
 ├── core/                cross-cutting: config, logging, security, exceptions,
-│                        events (in-memory + Redis bus), cache
+│                        events (in-memory + Redis bus), cache, metrics
 ├── db/                  async engine, session factory, session_scope()
 ├── models/              SQLAlchemy 2.0 mapped classes (13 tables)
 ├── schemas/             Pydantic v2 request/response models
-├── services/            business rules, authorization scoping, persistence
+├── services/            business rules, authorization scoping, persistence,
+│                        compound_policy.py (validated per-compound settings)
 ├── cv/                  ALL computer vision and gate-control code
 │   ├── detectors/       plate detector interface (YOLO + mock)
 │   ├── recognizers/     OCR + face recognizer interfaces (EasyOCR/Paddle, InsightFace/mock)
 │   ├── pipeline.py      frame → detections → crops → VisionResult
-│   ├── gate_controller.py  decision engine + barrier actuators
+│   ├── plate_rules.py   Egyptian plate parsing/normalisation/variants
+│   ├── quality.py       enrollment quality assessment (no DB deps)
+│   ├── actuators/       barrier drivers: simulator, webhook (HMAC), MQTT, GPIO
+│   ├── gate_controller.py  decision engine + barrier command execution
 │   ├── engine.py        process-wide VisionEngine singleton
 │   ├── manager.py       camera lifecycle (DB → workers)
 │   ├── worker.py        per-camera thread (fps limit, dedupe, status)
@@ -265,10 +269,26 @@ screens but is never the security boundary.
   timestamp and can be re-created from detections only if snapshots are also backed
   up. Back up both.
 * **Observability.** Structured text or JSON logs with request ids; every response
-  carries `X-Request-ID`; `/api/v1/health` (liveness) and `/api/v1/health/ready`
-  (database + Redis) support orchestrators.
-* **Secrets.** `SECRET_KEY`, database credentials and camera URLs come from the
-  environment. Nothing is baked into images.
+  carries `X-Request-ID`. `/api/v1/health` (liveness), `/health/live` (alias) and
+  `/api/v1/health/ready` (database, Redis, vision engine, barrier driver,
+  maintenance state + warnings) support orchestrators. `/metrics` exports
+  Prometheus counters/histograms/gauges (HTTP, decisions, barrier commands, vision
+  outcomes, enrolments, retention) from a private registry so reloads/tests never
+  collide.
+* **Policy layering.** Global defaults come from the environment; every compound
+  can override vision thresholds, access rules and the barrier driver in
+  `compound.settings`. `app/services/compound_policy.py` validates and clamps that
+  document once per request/worker, so a typo in the dashboard cannot disable
+  security (unknown-vehicle can never auto-allow, thresholds are bounded).
+* **Barrier abstraction.** `GateController` resolves the compound policy, asks the
+  actuator registry for the configured driver (rebuilt when settings change),
+  journals the command (driver, latency, attempts, error) and publishes
+  `gate.command`. Failures never block the access log: the decision is recorded
+  with `gate_opened=false` and surfaced as `barrier_failures` in analytics.
+* **Secrets.** `SECRET_KEY`, database credentials, camera URLs and barrier secrets
+  come from the environment or the masked per-compound policy; nothing is baked
+  into images. Production startup refuses placeholder/short secrets, `DEBUG=true`
+  and wildcard CORS.
 
 ---
 
@@ -279,7 +299,8 @@ screens but is never the security boundary.
 * **Swap OCR / face engine** — same recipe under `app/cv/recognizers/`.
 * **New access rule** — add a reason code and a branch to `AccessDecisionEngine`;
   keep it pure (no I/O outside the session) so it stays unit-testable.
-* **Alternative barrier hardware** — implement a `GateActuator` subclass or set
-  `compound.settings.gate_webhook_url` to an HTTP endpoint.
+* **Alternative barrier hardware** — implement a `BarrierActuator` subclass in
+  `app/cv/actuators/`, register it in `build_actuator()` and select it with
+  `compound.settings.barrier.driver`.
 * **Analytics** — services expose aggregate queries; add endpoints under
   `app/api/routes/analytics.py` without touching routers.
