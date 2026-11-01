@@ -48,10 +48,19 @@ operations that work on a single box or in Docker Compose.
   units with status/type/search filters; a unit that still has residents is
   refused with an actionable message, and the resident form links straight to
   unit creation when the compound has none yet.
-- Visitors and time-boxed temporary permits (window, entry limit, plate binding,
-  revoke with reason, resident self-service requests).
+- Visitor photos (uploaded through `POST /visitors/{id}/photo`; a failed upload
+  never loses the visitor) and time-boxed temporary permits (window, entry
+  limit, plate binding, revoke with reason, **edit of an issued permit** through
+  `PATCH /permits/{id}`, resident self-service requests).
 - Access logs with compound/gate/decision/direction/plate/date/override filters,
   CSV and Excel export, and officer override with audit trail.
+- Face enrollment is screened first: **Security → Enroll face** calls
+  `POST /faces/quality-check`, shows the score, sharpness/brightness and every
+  issue (with a hint) and keeps the enroll button disabled while the photo fails,
+  so a rejected photo never burns an embedding slot.
+- **Settings → Cameras** previews the live frame from
+  `GET /cv/cameras/{id}/snapshot` (authenticated blob fetch, optional 5-second
+  auto refresh) next to the existing stream test.
 - Analytics: today's entries/exits, decision mix, peak hours, per-gate performance,
   unknown vehicles, face match rate, occupancy and heatmap.
 - Roles: **Admin**, **Security Officer**, **Resident** — enforced in the API, the

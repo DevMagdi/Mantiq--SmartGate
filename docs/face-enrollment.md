@@ -59,7 +59,11 @@ with an account can enrol their own face later from
 ## 3. Enrol a face (correct workflow)
 
 **Step 1 — check the photo before storing it** (residents may only check
-themselves; staff can check anyone in their compound):
+themselves; staff can check anyone in their compound). The dashboard does this
+automatically: **Security → Enroll face** runs the check as soon as a resident
+and a photo are picked, renders the score, sharpness/brightness and every issue,
+and keeps *Enroll face* disabled until the photo passes — the curl below is the
+same call for scripts:
 
 ```bash
 curl -X POST localhost:8000/api/v1/faces/quality-check \
