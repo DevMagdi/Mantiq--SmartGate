@@ -837,7 +837,12 @@ export function SettingsPage(): JSX.Element {
         footer={
           <>
             <Button variant="outline" onClick={() => setGateOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => gateMutation.mutate()} loading={gateMutation.isPending} disabled={!gateForm.name.trim() || !gateForm.code.trim()}>
+            <Button
+              onClick={() => gateMutation.mutate()}
+              loading={gateMutation.isPending}
+              // Gates belong to a compound: block the submit until it is loaded.
+              disabled={!compound || !gateForm.name.trim() || !gateForm.code.trim()}
+            >
               {editingGate ? t("common.save_changes") : t("settings.gate.create")}
             </Button>
           </>

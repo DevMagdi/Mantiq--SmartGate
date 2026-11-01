@@ -610,7 +610,7 @@ export function RegistryPage(): JSX.Element {
         title={isManager ? t("registry.title.manager") : t("registry.title.resident")}
         subtitle={isManager ? t("registry.subtitle.manager") : t("registry.subtitle.resident")}
         actions={
-          isManager ? (
+          isManager && compound ? (
             <>
               {tab === "units" ? (
                 <Button variant="outline" icon="users" onClick={openCreateResident}>
@@ -625,13 +625,32 @@ export function RegistryPage(): JSX.Element {
                 {tab === "units" ? t("registry.add_unit") : t("registry.add_resident")}
               </Button>
             </>
-          ) : (
+          ) : isManager ? null : (
             <Button variant="outline" icon="visitors" onClick={() => navigate("/visitors")}>
               {t("registry.invite")}
             </Button>
           )
         }
       />
+
+      {/* A brand-new install has no compound yet: point the admin at the
+          Settings screen instead of showing forms that cannot be submitted. */}
+      {isManager && compounds.isLoading ? (
+        <Card><LoadingBlock label={t("registry.loading_compound")} /></Card>
+      ) : null}
+
+      {isManager && !compounds.isLoading && !compound ? (
+        <EmptyState
+          icon="gate"
+          title={t("registry.no_compound.title")}
+          description={t("registry.no_compound.desc")}
+          action={
+            <Button icon="gate" onClick={() => navigate("/settings")}>
+              {t("registry.no_compound.action")}
+            </Button>
+          }
+        />
+      ) : null}
 
       {!isManager && myProfile.isLoading ? (
         <Card><LoadingBlock label={t("registry.loading_household")} /></Card>
@@ -685,7 +704,7 @@ export function RegistryPage(): JSX.Element {
         </div>
       ) : null}
 
-      {isManager ? (
+      {isManager && compound ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Tabs
             tabs={[
@@ -742,7 +761,9 @@ export function RegistryPage(): JSX.Element {
         </div>
       ) : null}
 
-      <Card>
+      {/* Residents have no compound query (it is manager-scoped), so their
+          household card must never be hidden by the manager guard below. */}
+      {compound || !isManager ? <Card>
         {activeQuery.isLoading ? (
           <LoadingBlock />
         ) : tab === "units" && isManager ? (
@@ -913,7 +934,7 @@ export function RegistryPage(): JSX.Element {
             );
           })()
         )}
-      </Card>
+      </Card> : null}
 
       <Modal
         open={residentOpen}
@@ -927,7 +948,12 @@ export function RegistryPage(): JSX.Element {
             <Button
               onClick={() => residentMutation.mutate()}
               loading={residentMutation.isPending}
-              disabled={!residentForm.full_name.trim() || !residentForm.unit_id || unitOptions.length === 0}
+              disabled={
+                !compound ||
+                !residentForm.full_name.trim() ||
+                !residentForm.unit_id ||
+                unitOptions.length === 0
+              }
             >
               {editingResident ? t("common.save_changes") : t("registry.register_resident")}
             </Button>
@@ -961,7 +987,11 @@ export function RegistryPage(): JSX.Element {
             onChange={(event) => setResidentForm({ ...residentForm, email: event.target.value })}
             placeholder="resident@example.com"
           />
-          {!editingResident && unitOptions.length === 0 ? (
+          {!editingResident && units.isLoading ? (
+            <div className="sm:col-span-2 rounded-xl border border-ink-200 p-3 dark:border-ink-700">
+              <LoadingBlock label={t("registry.loading_units")} />
+            </div>
+          ) : !editingResident && unitOptions.length === 0 ? (
             <div className="rounded-xl border border-amber-300 bg-amber-50/80 p-3 sm:col-span-2 dark:border-amber-500/40 dark:bg-amber-500/10">
               <p className="flex items-center gap-2 text-xs font-semibold text-amber-800 dark:text-amber-200">
                 <Icon name="alert" className="h-4 w-4 shrink-0" />
@@ -1062,7 +1092,11 @@ export function RegistryPage(): JSX.Element {
         footer={
           <>
             <Button variant="outline" onClick={() => setVehicleOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => vehicleMutation.mutate()} loading={vehicleMutation.isPending} disabled={vehicleForm.plate_number.trim().length < 3}>
+            <Button
+              onClick={() => vehicleMutation.mutate()}
+              loading={vehicleMutation.isPending}
+              disabled={!compound || vehicleForm.plate_number.trim().length < 3}
+            >
               {editingVehicle ? t("common.save_changes") : t("registry.register_vehicle")}
             </Button>
           </>
@@ -1120,7 +1154,7 @@ export function RegistryPage(): JSX.Element {
             <Button
               onClick={() => unitMutation.mutate()}
               loading={unitMutation.isPending}
-              disabled={!unitForm.building.trim() || !unitForm.unit_number.trim()}
+              disabled={!compound || !unitForm.building.trim() || !unitForm.unit_number.trim()}
             >
               {editingUnit ? t("common.save_changes") : t("registry.create_unit")}
             </Button>

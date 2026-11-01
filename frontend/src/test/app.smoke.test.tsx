@@ -106,7 +106,8 @@ describe("GateVision dashboard", () => {
       await screen.findByRole("heading", { name: /residents & vehicles/i }, { timeout: 20_000 }),
     ).toBeTruthy();
 
-    screen.getByRole("tab", { name: /units/i }).click();
+    // Tabs render once the compound is loaded.
+    (await screen.findByRole("tab", { name: /units/i }, { timeout: 20_000 })).click();
     // Seeded units prove the tab reads from the API, not a hardcoded list.
     expect(await screen.findByText("A-101", {}, { timeout: 20_000 })).toBeTruthy();
 
