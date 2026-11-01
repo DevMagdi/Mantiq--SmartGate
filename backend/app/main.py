@@ -62,6 +62,22 @@ async def _startup_tasks(app: FastAPI) -> None:
             await connection.run_sync(Base.metadata.create_all)
         logger.info("Database schema ensured (AUTO_CREATE_TABLES=true)")
 
+    # A real install starts empty (SEED_DEMO_DATA=false) but still needs one
+    # account to log in with: create the bootstrap admin when no user exists.
+    try:
+        from app.db.session import session_scope
+        from app.services.seed_service import seed_service
+
+        async with session_scope() as session:
+            bootstrap_admin = await seed_service.ensure_admin(session)
+        if bootstrap_admin is not None and not settings.SEED_DEMO_DATA:
+            logger.info(
+                "Bootstrap admin ready: %s — change the password after the first login",
+                bootstrap_admin.email,
+            )
+    except Exception:  # pragma: no cover - defensive: never block boot
+        logger.exception("Could not prepare the bootstrap administrator")
+
     if settings.SEED_DEMO_DATA:
         try:
             from app.services.seed_service import seed_demo_data

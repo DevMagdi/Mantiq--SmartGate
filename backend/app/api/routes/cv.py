@@ -253,6 +253,12 @@ def _probe_hint(result: object) -> str | None:
             "The host is unreachable. Ping the camera IP from the server that runs the CV "
             "worker, then confirm the stream path (e.g. /Streaming/Channels/101 for Hikvision)."
         )
+    if "unable to open" in lowered or "cannot open" in lowered or "could not open" in lowered:
+        return (
+            "The stream could not be opened. Ping the camera IP from the CV worker host, confirm "
+            "TCP 554 is open, then double-check the stream path for your model "
+            "(Hikvision /Streaming/Channels/101, Dahua /cam/realmonitor?channel=1&subtype=0)."
+        )
     if "usb" in lowered or "index" in lowered:
         return "USB index not present. List devices with `v4l2-ctl --list-devices` (Linux)."
     return (

@@ -267,6 +267,15 @@ class Settings(BaseSettings):
             problems.append("SECRET_KEY is shorter than 32 characters")
         if "*" in self.CORS_ORIGINS:
             problems.append("CORS_ORIGINS allows every origin; list the dashboard origins explicitly")
+        if self.is_production and self.SEED_ADMIN_PASSWORD.strip() in {
+            "Admin@12345",
+            "admin@12345",
+            "admin123",
+        }:
+            problems.append(
+                "Bootstrap admin password is the shipped default; change it after the first login "
+                "or set SEED_ADMIN_PASSWORD explicitly"
+            )
         if "*" in self.TRUSTED_HOSTS:
             problems.append("TRUSTED_HOSTS is unrestricted; set the real API host names")
         if self.DEBUG:

@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.access import AccessLog
 from app.models.compound import Camera, Gate
 from app.models.enums import CameraStatus, GateStatus
@@ -81,6 +81,10 @@ class GateService:
         await session.commit()
 
 
+#: How masked credentials look in API responses (``rtsp://admin:***@host``).
+MASK = "***"
+
+
 class CameraService:
     """CRUD for cameras plus live status."""
 
@@ -120,6 +124,10 @@ class CameraService:
         return build_page(items, total, params)
 
     async def create(self, session: AsyncSession, payload: CameraCreate) -> Camera:
+        if MASK in payload.source_url:
+            raise BadRequestError(
+                "source_url is masked; send the real RTSP/USB URL when creating a camera"
+            )
         duplicate = await session.scalar(
             select(Camera).where(Camera.gate_id == payload.gate_id, Camera.name == payload.name)
         )
@@ -137,6 +145,10 @@ class CameraService:
     ) -> Camera:
         camera = await self.get(session, camera_id)
         data = payload.model_dump(exclude_unset=True)
+        # The dashboard only ever sees masked URLs. Sending one back must never
+        # overwrite the stored credentials with asterisks.
+        if MASK in str(data.get("source_url", "")):
+            data.pop("source_url", None)
         if "name" in data and data["name"] != camera.name:
             duplicate = await session.scalar(
                 select(Camera).where(

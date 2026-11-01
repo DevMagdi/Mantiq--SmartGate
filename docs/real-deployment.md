@@ -50,11 +50,23 @@ Minimum `.env` for a real site:
 | `CV_MODELS_DIR` | `./backend/models` | mounted read-only at `/app/models` |
 | `CAMERAS_JSON` | see step 2 | optional: cameras from the environment |
 
-The API creates **only the bootstrap admin** when `SEED_DEMO_DATA=false`:
+With `SEED_DEMO_DATA=false` the API creates **only a bootstrap admin** — enough
+to log in and build the site from scratch:
 
 ```
-admin@gatevision.app / Admin@12345     ← change this password immediately
+SEED_ADMIN_EMAIL=admin@gatevision.app      # change before the first boot
+SEED_ADMIN_PASSWORD=Admin@12345            # change it after the first login
 ```
+
+Then, in the dashboard:
+
+1. **Settings → Compound** → *Create compound* (name + code, e.g. `PALM-HILLS`).
+2. **Settings → Gates** → add `GATE-IN` (entry) and `GATE-OUT` (exit).
+3. **Settings → Cameras** → add the RTSP URLs (step 2 below).
+
+The bootstrap account is only created when the `users` table is empty, so
+restarting never overwrites a changed password. In `ENVIRONMENT=production` a
+default admin password is reported as a configuration warning at boot.
 
 Services and what they do:
 

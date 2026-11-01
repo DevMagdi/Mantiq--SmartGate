@@ -155,8 +155,18 @@ class CameraManager:
                 self._configs.pop(camera_id, None)
                 logger.info("Camera removed from supervisor: %s", worker.config.name)
         for config in configs:
-            if config.camera_id in self._workers:
-                continue
+            existing = self._workers.get(config.camera_id)
+            if existing is not None:
+                if existing.config == config:
+                    continue
+                # URL, fps, position or a per-compound threshold changed: the
+                # running thread still holds the old settings, so rotate it.
+                self._workers.pop(config.camera_id, None)
+                existing.stop()
+                await asyncio.to_thread(existing.join, 2.0)
+                logger.info(
+                    "Camera configuration changed; restarting worker: %s", config.name
+                )
             if config.compound_id not in self._galleries:
                 self._galleries[config.compound_id] = MutableGallery(await self._build_gallery(config.compound_id))
             self._start_worker(config)

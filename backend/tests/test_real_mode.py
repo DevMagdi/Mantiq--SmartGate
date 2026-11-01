@@ -297,3 +297,76 @@ def test_real_mode_engine_never_invents_a_result_without_models() -> None:
     message = str(excinfo.value)
     assert "model" in message.lower() or "easyocr" in message.lower() or "insightface" in message.lower()
     assert engine.status()["engine_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_is_available_without_demo_seeding(client: Any) -> None:
+    """A production install (SEED_DEMO_DATA=false) must still be able to log in."""
+    from sqlalchemy import func, select
+
+    from app.db.session import session_scope
+    from app.models.user import User
+    from app.services.seed_service import seed_service
+
+    async with session_scope() as session:
+        admin = await seed_service.ensure_admin(session)
+        assert admin is not None
+        assert admin.role.value == "admin"
+        email = admin.email
+
+    # Idempotent: a second boot must not duplicate the account.
+    async with session_scope() as session:
+        again = await seed_service.ensure_admin(session)
+        assert again is not None and again.email == email
+        count = int(
+            (await session.execute(select(func.count(User.id)).where(User.email == email))).scalar()
+            or 0
+        )
+    assert count == 1
+
+
+def test_camera_api_masks_stream_credentials(
+    client: TestClient, admin_headers: dict[str, str], demo: dict[str, Any]
+) -> None:
+    """RTSP passwords must never leave the database through the API."""
+    gate_id = demo["gate"]["id"]
+    created = client.post(
+        f"{API}/cameras",
+        headers=admin_headers,
+        json={
+            "gate_id": gate_id,
+            "name": "Masked lane",
+            "source_type": "rtsp",
+            "source_url": "rtsp://admin:S3cretPass@10.9.9.9:554/Streaming/Channels/101",
+            "fps_limit": 5,
+            "position": "front",
+            "is_active": False,
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    body = created.json()
+    assert "S3cretPass" not in body["source_url"]
+    assert body["source_url"] == "rtsp://admin:***@10.9.9.9:554/Streaming/Channels/101"
+    assert body["has_credentials"] is True
+
+    # Sending the masked value back must not overwrite the stored URL.
+    patched = client.patch(
+        f"{API}/cameras/{body['id']}",
+        headers=admin_headers,
+        json={"source_url": body["source_url"], "fps_limit": 4},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["fps_limit"] == 4
+    from app.db.session import session_scope
+    from app.models.compound import Camera
+
+    import asyncio
+    import uuid as _uuid
+
+    async def _stored() -> str:
+        async with session_scope() as session:
+            camera = await session.get(Camera, _uuid.UUID(body["id"]))
+            assert camera is not None
+            return camera.source_url
+
+    assert asyncio.run(_stored()).endswith("S3cretPass@10.9.9.9:554/Streaming/Channels/101")

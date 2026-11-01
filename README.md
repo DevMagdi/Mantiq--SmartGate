@@ -182,6 +182,11 @@ account), no demo cameras. Add your cameras in **Settings → Cameras** (or via
 `CAMERAS_JSON`) and put the plate model in `./backend/models/` — the worker image
 installs the full CV stack (`INSTALL_CV=true`).
 
+On a fresh database the API creates one bootstrap admin
+(`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, default `admin@gatevision.app` /
+`Admin@12345`) so you can log in, create the compound, its gates and cameras —
+then change the password. Nothing else is seeded.
+
 For the offline demo instead:
 
 ```bash

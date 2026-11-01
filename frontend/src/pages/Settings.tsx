@@ -25,6 +25,7 @@ import { useI18n } from "@/i18n";
 import { useToast } from "@/hooks/useToast";
 import {
   createCamera,
+  createCompound,
   createGate,
   createUser,
   deactivateUser,
@@ -124,7 +125,13 @@ export function SettingsPage(): JSX.Element {
   const [passwordTarget, setPasswordTarget] = useState<User | null>(null);
   const [newPassword, setNewPassword] = useState("");
 
-  const [compoundForm, setCompoundForm] = useState({ name: "", city: "", contact_phone: "", contact_email: "" });
+  const [compoundForm, setCompoundForm] = useState({
+    name: "",
+    code: "",
+    city: "",
+    contact_phone: "",
+    contact_email: "",
+  });
   const [accountForm, setAccountForm] = useState({ current: "", next: "", confirm: "" });
 
   const compounds = useQuery({ queryKey: ["compounds"], queryFn: listCompounds });
@@ -139,6 +146,7 @@ export function SettingsPage(): JSX.Element {
     if (!compound) return;
     setCompoundForm({
       name: compound.name,
+      code: compound.code,
       city: compound.city ?? "",
       contact_phone: compound.contact_phone ?? "",
       contact_email: compound.contact_email ?? "",
@@ -183,14 +191,21 @@ export function SettingsPage(): JSX.Element {
     mutationFn: async (): Promise<void> => {
       if (!cameraForm.gate_id) throw new Error(t("settings.error.select_gate"));
       if (editingCamera) {
-        await updateCamera(editingCamera.id, {
+        const payload = {
           name: cameraForm.name,
           source_type: cameraForm.source_type,
-          source_url: cameraForm.source_url,
           fps_limit: cameraForm.fps_limit,
           position: cameraForm.position,
           notes: cameraForm.notes,
-        });
+        };
+        // The API masks credentials; an untouched field means "keep the stored
+        // URL" and must not overwrite it with asterisks.
+        await updateCamera(
+          editingCamera.id,
+          cameraForm.source_url.trim() && cameraForm.source_url !== editingCamera.source_url
+            ? { ...payload, source_url: cameraForm.source_url.trim() }
+            : payload,
+        );
       } else {
         await createCamera(cameraForm);
       }
@@ -305,6 +320,23 @@ export function SettingsPage(): JSX.Element {
     onError: (error) => toast.error(t("settings.toast.command_failed"), apiErrorMessage(error)),
   });
 
+  const createCompoundMutation = useMutation({
+    mutationFn: () =>
+      createCompound({
+        name: compoundForm.name.trim(),
+        code: compoundForm.code.trim().toUpperCase() || "COMPOUND",
+        city: compoundForm.city || null,
+        contact_phone: compoundForm.contact_phone || null,
+        contact_email: compoundForm.contact_email || null,
+      }),
+    onSuccess: async () => {
+      toast.success(t("settings.toast.compound_created"));
+      setCompoundForm({ name: "", code: "", city: "", contact_phone: "", contact_email: "" });
+      await invalidate();
+    },
+    onError: (error) => toast.error(t("settings.toast.compound_error"), apiErrorMessage(error)),
+  });
+
   const compoundMutation = useMutation({
     mutationFn: async (): Promise<void> => {
       if (!compound) throw new Error(t("settings.error.no_compound"));
@@ -366,7 +398,9 @@ export function SettingsPage(): JSX.Element {
       gate_id: camera.gate_id,
       name: camera.name,
       source_type: camera.source_type,
-      source_url: camera.source_url,
+      // Leave blank so a masked URL is never written back; the placeholder
+      // shows the currently configured (masked) address.
+      source_url: "",
       fps_limit: camera.fps_limit,
       position: camera.position,
       notes: camera.notes ?? "",
@@ -674,6 +708,68 @@ export function SettingsPage(): JSX.Element {
             </form>
           </Card>
 
+          {!compound && isAdmin ? (
+            <Card>
+              <CardHeader
+                title={t("settings.compound.create_title")}
+                subtitle={t("settings.compound.create_subtitle")}
+                icon="gate"
+              />
+              <div className="space-y-4 p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    label={t("settings.compound.name")}
+                    required
+                    value={compoundForm.name}
+                    onChange={(event) => setCompoundForm({ ...compoundForm, name: event.target.value })}
+                    placeholder="Palm Hills"
+                  />
+                  <Input
+                    label={t("common.code")}
+                    required
+                    value={compoundForm.code}
+                    onChange={(event) =>
+                      setCompoundForm({ ...compoundForm, code: event.target.value.toUpperCase() })
+                    }
+                    placeholder="PALM-HILLS"
+                    className="font-mono"
+                  />
+                  <Input
+                    label={t("settings.compound.city")}
+                    value={compoundForm.city}
+                    onChange={(event) => setCompoundForm({ ...compoundForm, city: event.target.value })}
+                    placeholder="Cairo"
+                  />
+                  <Input
+                    label={t("settings.compound.phone")}
+                    value={compoundForm.contact_phone}
+                    onChange={(event) =>
+                      setCompoundForm({ ...compoundForm, contact_phone: event.target.value })
+                    }
+                    placeholder="+20 100 000 0000"
+                  />
+                  <Input
+                    label={t("settings.compound.email")}
+                    value={compoundForm.contact_email}
+                    onChange={(event) =>
+                      setCompoundForm({ ...compoundForm, contact_email: event.target.value })
+                    }
+                    placeholder="security@compound.eg"
+                    className="sm:col-span-2"
+                  />
+                </div>
+                <Button
+                  icon="plus"
+                  onClick={() => createCompoundMutation.mutate()}
+                  loading={createCompoundMutation.isPending}
+                  disabled={compoundForm.name.trim().length < 2 || compoundForm.code.trim().length < 2}
+                >
+                  {t("settings.compound.create")}
+                </Button>
+              </div>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader title={t("settings.compound.title")} subtitle={isAdmin ? t("settings.compound.subtitle") : t("settings.compound.subtitle_readonly")} icon="gate" />
             <div className="space-y-4 p-5">
@@ -738,7 +834,15 @@ export function SettingsPage(): JSX.Element {
         footer={
           <>
             <Button variant="outline" onClick={() => setCameraOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => cameraMutation.mutate()} loading={cameraMutation.isPending} disabled={!cameraForm.name.trim() || !cameraForm.source_url.trim() || !cameraForm.gate_id}>
+            <Button
+              onClick={() => cameraMutation.mutate()}
+              loading={cameraMutation.isPending}
+              disabled={
+                !cameraForm.name.trim() ||
+                (!editingCamera && !cameraForm.source_url.trim()) ||
+                !cameraForm.gate_id
+              }
+            >
               {editingCamera ? t("common.save_changes") : t("settings.add_camera")}
             </Button>
           </>
@@ -758,7 +862,19 @@ export function SettingsPage(): JSX.Element {
             <option value="file">{t("settings.camera.source_file")}</option>
             <option value="demo">{t("settings.camera.source_demo")}</option>
           </Select>
-          <Input label={t("settings.camera.source_url")} required value={cameraForm.source_url} onChange={(event) => setCameraForm({ ...cameraForm, source_url: event.target.value })} placeholder="rtsp://… or 0" />
+          <Input
+            label={t("settings.camera.source_url")}
+            required={!editingCamera}
+            value={cameraForm.source_url}
+            onChange={(event) => setCameraForm({ ...cameraForm, source_url: event.target.value })}
+            placeholder={editingCamera?.source_url ?? "rtsp://user:password@10.0.0.11:554/Streaming/Channels/101"}
+            hint={
+              editingCamera
+                ? t("settings.camera.source_url_keep_hint")
+                : t("settings.camera.source_url_hint")
+            }
+            className="sm:col-span-2 font-mono"
+          />
           <Input label={t("settings.camera.fps")} type="number" min={1} max={30} value={cameraForm.fps_limit ?? 5} onChange={(event) => setCameraForm({ ...cameraForm, fps_limit: Number(event.target.value) })} />
           <Input label={t("settings.camera.position")} value={cameraForm.position} onChange={(event) => setCameraForm({ ...cameraForm, position: event.target.value })} placeholder="front" />
           <Textarea label={t("common.notes")} value={cameraForm.notes ?? ""} onChange={(event) => setCameraForm({ ...cameraForm, notes: event.target.value })} className="sm:col-span-2" />
