@@ -254,7 +254,11 @@ class BarrierPolicy:
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "BarrierPolicy":
         raw = dict(data or {})
         defaults = cls()
-        driver = (_as_str(raw.get("driver"), defaults.driver) or "simulator").lower()
+        driver = (
+            _as_str(raw.get("driver"))
+            or _as_str(settings.BARRIER_DRIVER)
+            or defaults.driver
+        ).lower()
         if driver not in SUPPORTED_BARRIER_DRIVERS:
             logger.warning("Unknown barrier driver %r, falling back to simulator", driver)
             driver = "simulator"
@@ -264,9 +268,15 @@ class BarrierPolicy:
         return cls(
             driver=driver,
             webhook=WebhookConfig(
-                url=_as_str(webhook_raw.get("url")),
-                secret=_as_str(webhook_raw.get("secret")),
-                timeout_seconds=_as_float(webhook_raw.get("timeout_seconds"), 3.0, 0.5, 30.0),
+                url=_as_str(webhook_raw.get("url")) or _as_str(settings.BARRIER_WEBHOOK_URL),
+                secret=_as_str(webhook_raw.get("secret"))
+                or _as_str(settings.BARRIER_WEBHOOK_SECRET),
+                timeout_seconds=_as_float(
+                    webhook_raw.get("timeout_seconds"),
+                    settings.BARRIER_WEBHOOK_TIMEOUT_SECONDS,
+                    0.5,
+                    30.0,
+                ),
                 retries=_as_int(webhook_raw.get("retries"), 2, 0, 5),
                 verify_tls=_as_bool(webhook_raw.get("verify_tls"), True),
             ),

@@ -95,6 +95,14 @@ class Settings(BaseSettings):
     CV_YOLO_DEVICE: str = ""  # "" = auto (CUDA when present), "cpu", "0", "cuda:1"
     CV_YOLO_HALF: bool = False
     CV_OCR_ALLOWLIST: bool = True
+
+    # Deployment-wide barrier defaults. A compound policy always wins; these
+    # let ops point every gate at one controller through the environment.
+    BARRIER_DRIVER: str = "simulator"  # simulator | webhook | mqtt | gpio
+    BARRIER_WEBHOOK_URL: str = ""
+    BARRIER_WEBHOOK_SECRET: str = ""
+    BARRIER_WEBHOOK_TIMEOUT_SECONDS: float = 3.0
+    BARRIER_COMMAND_TIMEOUT_SECONDS: float = 10.0
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
     CV_OCR_LANGUAGES: list[str] = Field(default_factory=lambda: ["en"])
     CV_FACE_ENGINE: str = "insightface"  # insightface | mock

@@ -118,6 +118,55 @@ class GateCommandResult(BaseModel):
     action: str
     accepted: bool
     detail: str
+    driver: str = "simulator"
+    latency_ms: int = 0
+    command_id: str | None = None
+
+
+class ActuatorCommandRead(BaseModel):
+    """One journaled barrier command."""
+
+    id: str
+    occurred_at: str
+    gate_code: str
+    gate_id: str | None = None
+    compound_id: str | None = None
+    action: str
+    driver: str
+    accepted: bool
+    latency_ms: int = 0
+    attempts: int = 1
+    detail: str
+    actor: str
+    reason: str
+    error: str | None = None
+    external_status: int | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActuatorStatus(BaseModel):
+    """Barrier driver configuration, health and recent commands."""
+
+    compound_id: uuid.UUID | None = None
+    compound_name: str | None = None
+    configured: bool = False
+    driver: str = "simulator"
+    name: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    health: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    journal: dict[str, Any] = Field(default_factory=dict)
+    recent_commands: list[ActuatorCommandRead] = Field(default_factory=list)
+
+
+class ActuatorStatusResponse(BaseModel):
+    compounds: list[ActuatorStatus] = Field(default_factory=list)
+    journal: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActuatorTestRequest(BaseModel):
+    gate_id: uuid.UUID
+    action: str = Field(default="open", pattern="^(open|close|hold)$")
 
 
 class VisionAnalyzeResponse(BaseModel):
