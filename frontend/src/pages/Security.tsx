@@ -29,6 +29,7 @@ import { useToast } from "@/hooks/useToast";
 import { listCompounds } from "@/services/admin";
 import { listResidents } from "@/services/registry";
 import {
+  checkFaceQuality,
   createBlacklistEntry,
   deactivateFace,
   deleteBlacklistEntry,
@@ -48,6 +49,7 @@ import type {
   BlacklistEntryType,
   BlacklistReason,
   FaceEmbedding,
+  FaceQualityReport,
 } from "@/types/models";
 import { BLACKLIST_TYPE_META } from "@/utils/constants";
 import { formatDate, formatPercent } from "@/utils/format";
@@ -95,6 +97,7 @@ export function SecurityPage(): JSX.Element {
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [enrollResident, setEnrollResident] = useState("");
   const [enrollFile, setEnrollFile] = useState<File | null>(null);
+  const [enrollReport, setEnrollReport] = useState<FaceQualityReport | null>(null);
   const [overwrite, setOverwrite] = useState(false);
   const [faceToDelete, setFaceToDelete] = useState<FaceEmbedding | null>(null);
 
@@ -186,6 +189,25 @@ export function SecurityPage(): JSX.Element {
     onError: (error) => toast.error(t("security.toast.delete_failed"), apiErrorMessage(error)),
   });
 
+  // Pre-flight the photo through POST /faces/quality-check before enrolling:
+  // the API rejects an enrollment that fails these gates, so we surface the
+  // exact reason here instead of failing after the upload.
+  const qualityMutation = useMutation({
+    mutationFn: ({ residentId, file }: { residentId: string; file: File }) =>
+      checkFaceQuality(residentId, file),
+    onSuccess: (report) => setEnrollReport(report),
+    onError: (error) => {
+      setEnrollReport(null);
+      toast.error(t("security.toast.quality_failed"), apiErrorMessage(error));
+    },
+  });
+
+  const runQualityCheck = (residentId: string, file: File | null): void => {
+    setEnrollReport(null);
+    if (!residentId || !file) return;
+    qualityMutation.mutate({ residentId, file });
+  };
+
   const enrollMutation = useMutation({
     mutationFn: async (): Promise<void> => {
       if (!enrollFile) throw new Error(t("security.error.choose_photo"));
@@ -196,6 +218,7 @@ export function SecurityPage(): JSX.Element {
       toast.success(t("security.toast.face_enrolled"), t("security.toast.face_enrolled_hint"));
       setEnrollOpen(false);
       setEnrollFile(null);
+      setEnrollReport(null);
       setEnrollResident("");
       setOverwrite(false);
       await invalidate();
@@ -490,20 +513,41 @@ export function SecurityPage(): JSX.Element {
 
       <Modal
         open={enrollOpen}
-        onClose={() => setEnrollOpen(false)}
+        onClose={() => {
+          setEnrollOpen(false);
+          setEnrollFile(null);
+          setEnrollReport(null);
+        }}
         title={t("security.modal.enroll_title")}
         description={t("security.modal.enroll_description")}
         footer={
           <>
             <Button variant="outline" onClick={() => setEnrollOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => enrollMutation.mutate()} loading={enrollMutation.isPending} disabled={!enrollFile || !enrollResident}>
+            <Button
+              onClick={() => enrollMutation.mutate()}
+              loading={enrollMutation.isPending}
+              disabled={
+                !enrollFile ||
+                !enrollResident ||
+                qualityMutation.isPending ||
+                (enrollReport !== null && !enrollReport.passed)
+              }
+            >
               {t("security.enroll_face")}
             </Button>
           </>
         }
       >
         <div className="space-y-4">
-          <Select label={t("security.form.resident")} required value={enrollResident} onChange={(event) => setEnrollResident(event.target.value)}>
+          <Select
+            label={t("security.form.resident")}
+            required
+            value={enrollResident}
+            onChange={(event) => {
+              setEnrollResident(event.target.value);
+              runQualityCheck(event.target.value, enrollFile);
+            }}
+          >
             <option value="">{t("security.form.select_resident")}</option>
             {(residents.data?.items ?? []).map((resident) => (
               <option key={resident.id} value={resident.id}>
@@ -516,10 +560,83 @@ export function SecurityPage(): JSX.Element {
             <input
               type="file"
               accept="image/*"
-              onChange={(event) => setEnrollFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                setEnrollFile(file);
+                runQualityCheck(enrollResident, file);
+              }}
               className="block w-full cursor-pointer rounded-xl border border-dashed border-ink-300 bg-ink-50/60 px-3 py-4 text-xs text-ink-500 file:mr-3 file:rounded-lg file:border-0 file:bg-brand-50 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-brand-700 dark:border-ink-700 dark:bg-ink-950/40 dark:text-ink-400 dark:file:bg-brand-500/10 dark:file:text-brand-300"
             />
           </div>
+          {qualityMutation.isPending ? (
+            <div className="rounded-xl border border-ink-200 p-3 dark:border-ink-700">
+              <LoadingBlock label={t("security.quality.checking")} />
+            </div>
+          ) : null}
+
+          {enrollReport ? (
+            <div
+              className={
+                enrollReport.passed
+                  ? "rounded-xl border border-brand-300 bg-brand-50/70 p-3 dark:border-brand-500/40 dark:bg-brand-500/10"
+                  : "rounded-xl border border-rose-300 bg-rose-50/70 p-3 dark:border-rose-500/40 dark:bg-rose-500/10"
+              }
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-2 text-xs font-semibold">
+                  <Icon
+                    name={enrollReport.passed ? "check" : "alert"}
+                    className={enrollReport.passed ? "h-4 w-4 text-brand-600" : "h-4 w-4 text-rose-600"}
+                  />
+                  {enrollReport.passed
+                    ? t("security.quality.passed")
+                    : t("security.quality.failed")}
+                </p>
+                <Badge tone={enrollReport.passed ? "success" : "danger"}>
+                  {t("security.quality.score", { value: Math.round(enrollReport.score) })}
+                </Badge>
+              </div>
+              <p className="mt-1 text-[11px] text-ink-500 dark:text-ink-400">
+                {t("security.quality.details", {
+                  faces: enrollReport.face_count,
+                  width: enrollReport.width,
+                  height: enrollReport.height,
+                })}
+              </p>
+              <p className="text-[11px] text-ink-500 dark:text-ink-400">
+                {t("security.quality.metrics", {
+                  blur: Math.round(enrollReport.blur),
+                  brightness: Math.round(enrollReport.brightness),
+                })}
+              </p>
+              {enrollReport.issues.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {enrollReport.issues.map((issue) => (
+                    <li key={issue.code} className="flex items-start gap-1.5 text-[11px] leading-relaxed">
+                      <Icon
+                        name={issue.severity === "error" ? "x" : "alert"}
+                        className={
+                          issue.severity === "error"
+                            ? "mt-0.5 h-3 w-3 shrink-0 text-rose-500"
+                            : "mt-0.5 h-3 w-3 shrink-0 text-amber-500"
+                        }
+                      />
+                      <span>
+                        <span className="font-semibold">{t(`security.quality.issue.${issue.code}`)}</span>
+                        {issue.hint ? ` — ${issue.hint}` : ` — ${issue.message}`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {!enrollReport.passed ? (
+                <p className="mt-2 text-[11px] font-medium text-rose-600 dark:text-rose-300">
+                  {t("security.quality.blocked")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <label className="flex items-center gap-2 text-xs text-ink-600 dark:text-ink-300">
             <input
               type="checkbox"

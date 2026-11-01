@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -295,6 +297,37 @@ describe("GateVision dashboard", () => {
     ).toBeTruthy();
     expect(await screen.findByRole("tab", { name: /gates/i })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: /users/i })).toBeNull();
+  });
+
+  it("screens an enrollment photo through the quality-check endpoint", async () => {
+    await signIn("admin");
+    renderAt("/security");
+
+    await screen.findByRole("heading", { name: /blacklist & face recognition/i }, {
+      timeout: 20_000,
+    });
+    (await screen.findByRole("button", { name: /enroll face/i })).click();
+
+    await screen.findByLabelText(/^resident/i, {}, { timeout: 20_000 });
+    await waitFor(
+      () => {
+        const select = screen.getByLabelText(/^resident/i) as HTMLSelectElement;
+        expect(select.options.length).toBeGreaterThan(1);
+      },
+      { timeout: 20_000 },
+    );
+    const residentSelect = screen.getByLabelText(/^resident/i) as HTMLSelectElement;
+    fireEvent.change(residentSelect, { target: { value: residentSelect.options[1].value } });
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const bytes = readFileSync(resolve(process.cwd(), "src/test/fixtures/sample-face.jpg"));
+    const file = new File([new Uint8Array(bytes)], "face.jpg", { type: "image/jpeg" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    // Either verdict is fine — what matters is that the report from the API is rendered.
+    expect(
+      await screen.findByText(/quality check/i, {}, { timeout: 20_000 }),
+    ).toBeTruthy();
   });
 
   it("scopes the resident experience to their household", async () => {
