@@ -182,6 +182,7 @@ async def list_units(
         compound_id=compound_id,
         status=status_filter,
         building=building,
+        unit_type=unit_type,
         search=search,
     )
     return Page[UnitRead].create(

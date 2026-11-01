@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.models.compound import Compound, Unit
-from app.models.enums import UnitStatus
+from app.models.enums import UnitStatus, UnitType
 from app.models.people import Resident
 from app.schemas.common import Page
 from app.schemas.compound import CompoundCreate, CompoundUpdate, UnitCreate, UnitUpdate
@@ -144,6 +144,7 @@ class UnitService:
         compound_id: uuid.UUID | None,
         status: UnitStatus | None = None,
         building: str | None = None,
+        unit_type: UnitType | None = None,
         search: str | None = None,
     ) -> Page[Unit]:
         stmt = select(Unit)
@@ -153,6 +154,8 @@ class UnitService:
             stmt = stmt.where(Unit.status == status)
         if building:
             stmt = stmt.where(Unit.building == building)
+        if unit_type is not None:
+            stmt = stmt.where(Unit.unit_type == unit_type)
         if search:
             term = f"%{search.strip()}%"
             stmt = stmt.where(or_(Unit.building.ilike(term), Unit.unit_number.ilike(term)))
