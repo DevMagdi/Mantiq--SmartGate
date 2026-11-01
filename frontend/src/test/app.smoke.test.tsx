@@ -299,6 +299,25 @@ describe("GateVision dashboard", () => {
     expect(screen.queryByRole("tab", { name: /users/i })).toBeNull();
   });
 
+  it("previews a camera snapshot over the authenticated endpoint", async () => {
+    await signIn("admin");
+    renderAt("/settings");
+
+    await screen.findByRole("heading", { name: /^settings$/i }, { timeout: 20_000 });
+    (await screen.findByRole("tab", { name: /cameras/i })).click();
+    const cameraName = await screen.findByText("Entry Lane Camera", {}, { timeout: 20_000 });
+    const row = cameraName.closest("tr");
+    expect(row).toBeTruthy();
+    within(row as HTMLElement).getByRole("button", { name: /^snapshot$/i }).click();
+
+    // The seeded demo cameras have no live frame: the modal must explain the
+    // backend reason instead of showing a broken <img>.
+    expect(
+      await screen.findByText(/could not read a snapshot/i, {}, { timeout: 20_000 }),
+    ).toBeTruthy();
+    expect(await screen.findByText(/no live snapshot/i, {}, { timeout: 20_000 })).toBeTruthy();
+  });
+
   it("screens an enrollment photo through the quality-check endpoint", async () => {
     await signIn("admin");
     renderAt("/security");
