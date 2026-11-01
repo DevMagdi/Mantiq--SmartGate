@@ -46,8 +46,10 @@ import {
   type UserPayload,
 } from "@/services/admin";
 import { apiErrorMessage } from "@/services/api";
+import { fetchRealModeStatus, testCameraStream } from "@/services/cv";
 import type {
   Camera,
+  CameraProbeResult,
   CameraSourceType,
   Gate,
   GateDirection,
@@ -106,6 +108,15 @@ export function SettingsPage(): JSX.Element {
   const [cameraForm, setCameraForm] = useState<CameraPayload>(EMPTY_CAMERA);
   const [editingCamera, setEditingCamera] = useState<Camera | null>(null);
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null);
+  const [probe, setProbe] = useState<{ camera: Camera; result: CameraProbeResult | null } | null>(
+    null,
+  );
+  const realMode = useQuery({
+    queryKey: ["cv-real-mode"],
+    queryFn: fetchRealModeStatus,
+    retry: false,
+    refetchInterval: 60_000,
+  });
 
   const [userOpen, setUserOpen] = useState(false);
   const [userForm, setUserForm] = useState(EMPTY_USER);
@@ -242,6 +253,30 @@ export function SettingsPage(): JSX.Element {
       await invalidate();
     },
     onError: (error) => toast.error(t("settings.toast.camera_toggle_error"), apiErrorMessage(error)),
+  });
+
+  const probeMutation = useMutation({
+    mutationFn: (camera: Camera) => testCameraStream(camera.id),
+    onSuccess: async (result, camera) => {
+      setProbe({ camera, result });
+      if (result.ok) {
+        toast.success(
+          t("settings.toast.probe_ok"),
+          t("settings.toast.probe_ok_detail", {
+            width: result.width ?? "?",
+            height: result.height ?? "?",
+            latency: result.latency_ms,
+          }),
+        );
+      } else {
+        toast.error(t("settings.toast.probe_failed"), result.error ?? undefined);
+      }
+      await invalidate();
+    },
+    onError: (error, camera) => {
+      setProbe({ camera, result: null });
+      toast.error(t("settings.toast.probe_failed"), apiErrorMessage(error));
+    },
   });
 
   const deleteCameraMutation = useMutation({
@@ -414,6 +449,72 @@ export function SettingsPage(): JSX.Element {
       ) : null}
 
       {tab === "cameras" ? (
+        <>
+        <Card>
+          <CardHeader
+            title={t("settings.vision.title")}
+            subtitle={t("settings.vision.subtitle")}
+            icon="sparkles"
+            actions={
+              realMode.data ? (
+                <Badge tone={realMode.data.real_detections_only ? "success" : "warning"} dot>
+                  {realMode.data.real_detections_only
+                    ? t("settings.vision.real_badge")
+                    : t("settings.vision.mock_badge")}
+                </Badge>
+              ) : null
+            }
+          />
+          <div className="grid gap-3 p-4 sm:grid-cols-2">
+            <div className="rounded-xl border border-ink-200 p-3 text-xs dark:border-ink-800">
+              <p className="text-[10px] font-semibold uppercase text-ink-400">{t("settings.vision.mode")}</p>
+              <p className="mt-0.5 font-mono text-sm text-ink-900 dark:text-ink-100">
+                {realMode.data?.mode ?? "—"}
+              </p>
+              <p className="mt-1 text-[11px] text-ink-500 dark:text-ink-400">
+                {t("settings.vision.cameras", {
+                  online: realMode.data?.cameras_online ?? 0,
+                  total: realMode.data?.cameras_total ?? 0,
+                })}
+              </p>
+            </div>
+            <div className="rounded-xl border border-ink-200 p-3 text-xs dark:border-ink-800">
+              <p className="text-[10px] font-semibold uppercase text-ink-400">{t("settings.vision.barrier")}</p>
+              <p className="mt-0.5 font-mono text-sm text-ink-900 dark:text-ink-100">
+                {realMode.data?.barrier_driver ?? "—"}
+              </p>
+              <p className="mt-1 text-[11px] text-ink-500 dark:text-ink-400">
+                {realMode.data?.engine_ready
+                  ? t("settings.vision.engine_ready")
+                  : t("settings.vision.engine_not_ready")}
+              </p>
+            </div>
+            <div className="rounded-xl border border-ink-200 p-3 text-xs sm:col-span-2 dark:border-ink-800">
+              <p className="text-[10px] font-semibold uppercase text-ink-400">{t("settings.vision.models")}</p>
+              <dl className="mt-1 grid gap-1 text-[11px] sm:grid-cols-2">
+                {Object.entries(realMode.data?.models ?? {}).map(([key, value]) => (
+                  <div key={key} className="flex min-w-0 gap-2">
+                    <dt className="shrink-0 font-semibold text-ink-500 dark:text-ink-400">{key}</dt>
+                    <dd className="truncate font-mono text-ink-700 dark:text-ink-200" title={String(value)}>
+                      {String(value)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+            {(realMode.data?.warnings ?? []).length > 0 ? (
+              <ul className="space-y-1 text-[11px] text-amber-700 sm:col-span-2 dark:text-amber-300">
+                {(realMode.data?.warnings ?? []).map((warning) => (
+                  <li key={warning} className="flex gap-2">
+                    <Icon name="alert" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{warning}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </Card>
+
         <Card>
           <CardHeader title={t("settings.cameras.title")} subtitle={t("settings.cameras.subtitle")} icon="camera" />
           {cameras.isLoading ? (
@@ -446,11 +547,30 @@ export function SettingsPage(): JSX.Element {
                       <Td>
                         <p className="text-[10px] font-semibold uppercase text-ink-400">{camera.source_type}</p>
                         <p className="max-w-[220px] truncate font-mono text-[10px] text-ink-500 dark:text-ink-400">{camera.source_url}</p>
+                        {camera.last_error ? (
+                          <p className="max-w-[240px] truncate text-[10px] text-rose-500" title={camera.last_error}>
+                            {camera.last_error}
+                          </p>
+                        ) : null}
                       </Td>
                       <Td><Badge tone={online ? "success" : camera.status === "error" ? "danger" : "neutral"} dot>{t(`status.${camera.status}`, {})}</Badge></Td>
-                      <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">{formatDateTime(camera.last_frame_at)}</Td>
+                      <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">
+                        {formatDateTime(camera.last_frame_at)}
+                        {camera.resolution ? (
+                          <p className="font-mono text-[10px] text-ink-400">{camera.resolution}</p>
+                        ) : null}
+                      </Td>
                       <Td align="right">
                         <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="subtle"
+                            icon="play"
+                            onClick={() => probeMutation.mutate(camera)}
+                            loading={probeMutation.isPending && probeMutation.variables?.id === camera.id}
+                          >
+                            {t("settings.action.test_stream")}
+                          </Button>
                           <Button size="sm" variant="ghost" onClick={() => toggleCameraMutation.mutate({ camera, active: !camera.is_active })}>
                             {camera.is_active ? t("common.disable") : t("common.enable")}
                           </Button>
@@ -465,6 +585,7 @@ export function SettingsPage(): JSX.Element {
             </TableShell>
           )}
         </Card>
+        </>
       ) : null}
 
       {tab === "users" && isAdmin ? (
@@ -686,6 +807,55 @@ export function SettingsPage(): JSX.Element {
         }
       >
         <Input label={t("settings.account.new")} type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} hint={t("settings.password.hint")} />
+      </Modal>
+
+      <Modal
+        open={probe !== null}
+        onClose={() => setProbe(null)}
+        title={t("settings.probe.title")}
+        description={probe?.camera.name}
+        footer={
+          <Button variant="outline" onClick={() => setProbe(null)}>
+            {t("common.close")}
+          </Button>
+        }
+      >
+        {probe?.result ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={probe.result.ok ? "success" : "danger"} dot>
+                {probe.result.ok ? t("settings.probe.ok") : t("settings.probe.failed")}
+              </Badge>
+              <Badge tone="neutral">
+                {t("settings.probe.latency", { value: probe.result.latency_ms })}
+              </Badge>
+              {probe.result.width && probe.result.height ? (
+                <Badge tone="info">{`${probe.result.width}×${probe.result.height}`}</Badge>
+              ) : null}
+              {probe.result.brightness !== null ? (
+                <Badge tone={probe.result.brightness < 70 ? "warning" : "neutral"}>
+                  {t("settings.probe.brightness", { value: Math.round(probe.result.brightness) })}
+                </Badge>
+              ) : null}
+            </div>
+            {probe.result.preview_url ? (
+              <img
+                src={probe.result.preview_url}
+                alt={t("settings.probe.preview")}
+                className="w-full rounded-xl border border-ink-200 object-cover dark:border-ink-700"
+              />
+            ) : null}
+            <p className="font-mono text-[10px] break-all text-ink-400">{probe.result.source}</p>
+            {probe.result.error ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+                <p className="font-semibold">{probe.result.error}</p>
+                {probe.result.hint ? <p className="mt-1 leading-relaxed">{probe.result.hint}</p> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-xs text-ink-500 dark:text-ink-400">{t("settings.probe.no_result")}</p>
+        )}
       </Modal>
 
       <ConfirmDialog

@@ -49,6 +49,7 @@ class StatusUpdate:
     fps: float | None = None
     frames_read: int = 0
     reconnects: int = 0
+    resolution: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +119,8 @@ class CameraWorker(threading.Thread):
         self._sequence = 0
         self._last_status_at = 0.0
         self.observed_fps: float | None = None
+        self.last_resolution: str | None = None
+        self._first_frame_seen = False
         self.last_error: str | None = None
         self._status_key: tuple[str, str | None] | None = None
 
@@ -147,6 +150,7 @@ class CameraWorker(threading.Thread):
                     return
                 delay = min(delay * 2, max_delay)
                 continue
+            self._first_frame_seen = False
             self._emit_status(CameraStatus.ONLINE)
             return
 
@@ -154,11 +158,14 @@ class CameraWorker(threading.Thread):
     # hour must not write a database row every second.
     STATUS_REPEAT_SECONDS = 15.0
 
-    def _emit_status(self, status: CameraStatus, error: str | None = None) -> None:
+    def _emit_status(
+        self, status: CameraStatus, error: str | None = None, *, force: bool = False
+    ) -> None:
         now_monotonic = time.monotonic()
         key = (status.value, error)
         if (
-            key == self._status_key
+            not force
+            and key == self._status_key
             and now_monotonic - self._last_status_at < self.STATUS_REPEAT_SECONDS
         ):
             return
@@ -175,6 +182,7 @@ class CameraWorker(threading.Thread):
                     fps=self.observed_fps,
                     frames_read=self._source.frames_read if self._source else 0,
                     reconnects=self._source.reconnects if self._source else 0,
+                    resolution=self.last_resolution,
                 )
             )
         except Exception:  # pragma: no cover - callback guard
@@ -219,6 +227,13 @@ class CameraWorker(threading.Thread):
             last_frame_monotonic = time.monotonic()
             height, width = image.shape[:2]
             self.last_resolution = f"{int(width)}x{int(height)}"
+            if not self._first_frame_seen:
+                # Publish the resolution (and a fresh ``last_frame_at``) as soon
+                # as real pixels arrive instead of waiting for the heartbeat.
+                self._first_frame_seen = True
+                # ``force`` so the resolution/first-frame timestamp reaches the
+                # dashboard immediately instead of after the heartbeat window.
+                self._emit_status(CameraStatus.ONLINE, force=True)
 
             self._sequence += 1
             now = datetime.now(UTC)
@@ -285,7 +300,7 @@ class CameraWorker(threading.Thread):
                 self.observed_fps = (
                     smoothed if self.observed_fps is None else (0.9 * self.observed_fps + 0.1 * smoothed)
                 )
-            if time.monotonic() - self._last_status_at > 30:
+            if time.monotonic() - self._last_status_at >= self.STATUS_REPEAT_SECONDS:
                 self._emit_status(CameraStatus.ONLINE)
             remaining = interval - elapsed
             if remaining > 0 and self.stop_event.wait(remaining):

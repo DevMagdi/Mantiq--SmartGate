@@ -236,3 +236,64 @@ def test_real_mode_status_is_explicit_about_simulation(
     if payload["mode"] == "mock":
         assert payload["real_detections_only"] is False
         assert any("simulated" in item.lower() for item in payload["warnings"])
+
+
+def test_yolo_detector_keeps_only_plate_classes() -> None:
+    """A multi-class model must not send "car" boxes to OCR."""
+    from app.cv.detectors.yolo_plate import YOLOPlateDetector
+
+    detector = YOLOPlateDetector("/tmp/does-not-exist.pt")
+    detector._class_names = ["car", "plate", "person"]  # noqa: SLF001 - unit test
+    assert detector._resolve_plate_classes() == {1}  # noqa: SLF001
+
+    single = YOLOPlateDetector("/tmp/does-not-exist.pt")
+    single._class_names = ["plate"]  # noqa: SLF001
+    assert single._resolve_plate_classes() == {0}  # noqa: SLF001
+
+    # Unknown naming -> no filtering, the model is already plate-only.
+    generic = YOLOPlateDetector("/tmp/does-not-exist.pt")
+    generic._class_names = ["obj", "license"]  # noqa: SLF001
+    assert generic._resolve_plate_classes() is None  # noqa: SLF001
+
+
+def test_real_mode_engine_never_invents_a_result_without_models() -> None:
+    """No weights -> an explicit error, never a synthetic plate."""
+    from app.cv.engine import VisionEngine
+
+    class _RealConfig:
+        CV_MODE = "real"
+        CV_PLATE_MODEL_PATH = "/tmp/gatevision-missing-plate.pt"
+        CV_PLATE_DETECTOR = "yolo"
+        CV_OCR_ENGINE = "easyocr"
+        CV_OCR_LANGUAGES = ["en"]
+        CV_FACE_ENGINE = "insightface"
+        CV_FACE_MODEL_NAME = "buffalo_l"
+        CV_FACE_SIMILARITY_THRESHOLD = 0.45
+        CV_PLATE_CONFIDENCE_THRESHOLD = 0.35
+        CV_OCR_MIN_CONFIDENCE = 0.45
+        CV_MAX_FPS = 5.0
+        CV_FRAME_WIDTH = 1280
+        CV_SNAPSHOT_QUALITY = 85
+        CV_FACE_DET_SIZE = 640
+        CV_YOLO_IMAGE_SIZE = 640
+        CV_YOLO_IOU = 0.45
+        CV_YOLO_DEVICE = ""
+        CV_YOLO_HALF = False
+        CV_PLATE_CLASS_NAMES = "plate"
+        CV_MIN_PLATE_ASPECT = 1.6
+        CV_MAX_PLATE_ASPECT = 7.0
+        CV_OCR_ALLOWLIST = True
+        CV_LOW_LIGHT_ENHANCE = False
+        CV_LOW_LIGHT_THRESHOLD = 70.0
+        CV_LOW_LIGHT_CLIP_LIMIT = 2.5
+        CV_MOTION_MIN_AREA_RATIO = 0.0
+        MEDIA_ROOT = "/tmp/gatevision-media"
+        CV_DEMO_INTERVAL_SECONDS = 9.0
+
+    engine = VisionEngine(_RealConfig())  # type: ignore[arg-type]
+    image = np.zeros((240, 320, 3), dtype=np.uint8)
+    with pytest.raises(VisionEngineError) as excinfo:
+        engine.analyze_image(image)
+    message = str(excinfo.value)
+    assert "model" in message.lower() or "easyocr" in message.lower() or "insightface" in message.lower()
+    assert engine.status()["engine_ready"] is False

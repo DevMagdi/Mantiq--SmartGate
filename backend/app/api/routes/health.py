@@ -15,6 +15,10 @@ from app.core.logging import get_logger
 from app.core.metrics import render_metrics
 from app.cv.actuators import actuator_registry
 from app.cv.engine import get_vision_engine
+from app.cv.manager import get_camera_manager
+from app.cv.runner import read_heartbeat
+from app.models.compound import Camera, Gate
+from app.models.enums import CameraStatus
 from app.db.session import check_database
 from app.db.session import session_scope
 from app.models.security import FaceEmbedding
@@ -88,6 +92,45 @@ async def readiness() -> HealthResponse | JSONResponse:
         warnings.append("Vision engine is not ready; detections will fail until models load")
     warnings.extend(str(item) for item in engine.get("warnings", [])[:5])
 
+    # ------------------------------------------------ cameras & CV heartbeat
+    camera_counts: dict[str, int] = {"total": 0, "online": 0, "offline": 0, "error": 0}
+    if database_ok:
+        try:
+            async with session_scope() as session:
+                rows = (
+                    await session.execute(
+                        select(Camera.status, func.count(Camera.id))
+                        .join(Gate, Camera.gate_id == Gate.id)
+                        .group_by(Camera.status)
+                    )
+                ).all()
+            for status_value, count in rows:
+                key = str(status_value)
+                camera_counts["total"] += count
+                if key == CameraStatus.ONLINE.value:
+                    camera_counts["online"] += count
+                elif key == CameraStatus.ERROR.value:
+                    camera_counts["error"] += count
+                elif key == CameraStatus.OFFLINE.value:
+                    camera_counts["offline"] += count
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Could not count cameras for readiness: %s", exc)
+    manager = get_camera_manager()
+    workers = []
+    if manager is not None:
+        try:
+            workers = list(manager.status().get("workers", []))  # type: ignore[arg-type]
+        except Exception:  # pragma: no cover - defensive
+            workers = []
+    heartbeat = read_heartbeat()
+    in_process = bool(settings.CV_ENABLED and settings.CV_RUNNER_ENABLED)
+    worker_ok = (bool(heartbeat.get("fresh")) or bool(workers)) if settings.CV_ENABLED else True
+    if settings.CV_ENABLED and settings.CV_MODE == "real":
+        if camera_counts["total"] and camera_counts["online"] == 0:
+            warnings.append("No camera is online; check the RTSP URLs under Settings → Cameras")
+        if not worker_ok and not in_process:
+            warnings.append("CV runner heartbeat is stale; the cv-worker container is not reporting")
+
     checks: dict[str, object] = {
         "database": {"ok": database_ok},
         "redis": {"ok": redis_ok, "enabled": settings.REDIS_ENABLED},
@@ -102,6 +145,20 @@ async def readiness() -> HealthResponse | JSONResponse:
             "default_driver": settings.BARRIER_DRIVER,
             "compounds": actuator_registry.active_compounds,
         },
+        "cameras": {
+            "total": camera_counts["total"],
+            "online": camera_counts["online"],
+            "offline": camera_counts["offline"],
+            "error": camera_counts["error"],
+            "workers": len(workers),
+        },
+        "cv_worker": {
+            "enabled": settings.CV_ENABLED,
+            "runner_enabled": settings.CV_RUNNER_ENABLED,
+            "heartbeat": heartbeat,
+            "in_process_workers": len(workers),
+            "healthy": worker_ok,
+        },
         "maintenance": {"enabled": settings.MAINTENANCE_ENABLED},
     }
     healthy = database_ok and (redis_ok or not settings.REDIS_ENABLED)
@@ -114,7 +171,7 @@ async def readiness() -> HealthResponse | JSONResponse:
         cv_mode=settings.CV_MODE,
         timestamp=datetime.now(UTC),
         checks=checks,
-        warnings=warnings,
+        warnings=list(dict.fromkeys(warnings)),
     )
     if not healthy:
         return JSONResponse(

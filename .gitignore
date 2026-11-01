@@ -21,7 +21,11 @@ dist/
 *.db
 *.sqlite3
 backend/media/
-backend/models/
+# Model weights are large binaries: keep the directory (and its README) in git
+# but never the .pt/.onnx files.
+backend/models/*
+!backend/models/README.md
+!backend/models/.gitignore
 /tmp/
 logs/
 *.log

@@ -1,11 +1,14 @@
 # ============================================================================
-# GateVision — full stack
+# GateVision — production stack (real cameras, real ML, real barriers)
 #
-#   cp .env.example .env        # optional, every value has a working default
-#   docker compose up --build
+#   cp .env.example .env        # then set CV_MODE=real + your RTSP URLs
+#   docker compose up --build -d
 #
 #   dashboard  -> http://localhost:8080
 #   API docs   -> http://localhost:8000/docs
+#
+# For the scripted offline demo run:  CV_MODE=mock SEED_DEMO_DATA=true docker compose up
+# See docs/real-deployment.md for the full go-live checklist.
 # ============================================================================
 
 name: gatevision
@@ -30,13 +33,14 @@ x-api-environment: &api-environment
   MEDIA_ROOT: /data/media
   MEDIA_URL: /media
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
-  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+  # Real deployments start empty (admin account only); the demo compound is opt-in.
+  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
   SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@gatevision.app}
   SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin@12345}
   SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-GateVision Administrator}
   CV_ENABLED: ${CV_ENABLED:-true}
   CV_RUNNER_ENABLED: "false"
-  CV_MODE: ${CV_MODE:-mock}
+  CV_MODE: ${CV_MODE:-real}
   CV_PLATE_DETECTOR: ${CV_PLATE_DETECTOR:-yolo}
   CV_PLATE_MODEL_PATH: /app/models/plate_yolov8.pt
   CV_OCR_ENGINE: ${CV_OCR_ENGINE:-easyocr}
@@ -44,8 +48,29 @@ x-api-environment: &api-environment
   CV_FACE_ENGINE: ${CV_FACE_ENGINE:-insightface}
   CV_FACE_MODEL_NAME: ${CV_FACE_MODEL_NAME:-buffalo_l}
   CV_FACE_SIMILARITY_THRESHOLD: ${CV_FACE_SIMILARITY_THRESHOLD:-0.45}
-  CV_DEMO_CAMERAS: ${CV_DEMO_CAMERAS:-true}
+  CV_DEMO_CAMERAS: ${CV_DEMO_CAMERAS:-false}
   CV_DEMO_INTERVAL_SECONDS: ${CV_DEMO_INTERVAL_SECONDS:-9}
+  CV_ALLOW_DEMO_SOURCES: ${CV_ALLOW_DEMO_SOURCES:-false}
+  CV_RTSP_TRANSPORT: ${CV_RTSP_TRANSPORT:-tcp}
+  CV_RTSP_OPEN_TIMEOUT_MS: ${CV_RTSP_OPEN_TIMEOUT_MS:-5000}
+  CV_RTSP_READ_TIMEOUT_MS: ${CV_RTSP_READ_TIMEOUT_MS:-5000}
+  CV_RECONNECT_DELAY_SECONDS: ${CV_RECONNECT_DELAY_SECONDS:-2}
+  CV_RECONNECT_MAX_DELAY_SECONDS: ${CV_RECONNECT_MAX_DELAY_SECONDS:-30}
+  CV_STALL_TIMEOUT_SECONDS: ${CV_STALL_TIMEOUT_SECONDS:-20}
+  CV_LOW_LIGHT_ENHANCE: ${CV_LOW_LIGHT_ENHANCE:-true}
+  CV_LOW_LIGHT_THRESHOLD: ${CV_LOW_LIGHT_THRESHOLD:-70}
+  CV_CAMERA_PROBE_FRAMES: ${CV_CAMERA_PROBE_FRAMES:-5}
+  CV_MAX_FPS: ${CV_MAX_FPS:-5}
+  CV_DEDUPE_SECONDS: ${CV_DEDUPE_SECONDS:-8}
+  CV_SNAPSHOT_QUALITY: ${CV_SNAPSHOT_QUALITY:-85}
+  CV_OCR_ALLOWLIST: ${CV_OCR_ALLOWLIST:-true}
+  # Cameras can be bootstrapped from the environment (JSON, see docs).
+  CAMERAS_JSON: ${CAMERAS_JSON:-}
+  # Barrier defaults; a per-compound policy in the dashboard always wins.
+  BARRIER_DRIVER: ${BARRIER_DRIVER:-simulator}
+  BARRIER_WEBHOOK_URL: ${BARRIER_WEBHOOK_URL:-}
+  BARRIER_WEBHOOK_SECRET: ${BARRIER_WEBHOOK_SECRET:-}
+  BARRIER_WEBHOOK_TIMEOUT_SECONDS: ${BARRIER_WEBHOOK_TIMEOUT_SECONDS:-3}
   EXPORT_ROW_LIMIT: ${EXPORT_ROW_LIMIT:-50000}
   RETENTION_DAYS: ${RETENTION_DAYS:-365}
   MAINTENANCE_ENABLED: ${MAINTENANCE_ENABLED:-true}
@@ -137,6 +162,20 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # The runner writes a heartbeat file; a hung worker shows up as unhealthy.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import pathlib, sys, time
+          p = pathlib.Path("/tmp/gatevision-cv.heartbeat")
+          sys.exit(0 if p.exists() and time.time() - float(p.read_text() or 0) < 120 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
   frontend:
     build:

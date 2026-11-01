@@ -33,7 +33,11 @@ them:
 
 ```
 WARNING app.main | Configuration: CV_MODE=mock: gate decisions are simulated, not from real cameras
+WARNING app.main | Vision configuration: CV_MODE=mock: detections are simulated, not read from cameras.
 ```
+
+The end-to-end go-live procedure (cameras → models → barrier → verification) is
+in [`real-deployment.md`](real-deployment.md).
 
 ---
 

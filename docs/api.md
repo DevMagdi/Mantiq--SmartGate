@@ -344,11 +344,64 @@ two explainability signals:
 | `GET` | `/cv/gallery` | any scoped | Gallery statistics |
 | `POST` | `/cv/refresh-gallery` | manager | Hot reload after bulk import |
 | `GET` | `/cv/workers` | any | In-process worker status |
-| `GET` | `/cv/camera-health` | any | Counts by camera status |
+| `GET` | `/cv/camera-health` | any scoped | Per-camera health: status, redacted source, resolution, frame age, worker state + fleet counters |
+| `GET` | `/cv/real-mode` | any scoped | Proof of no-mock deployment: mode, `real_detections_only`, demo cameras, barrier driver, model paths, warnings |
+| `POST` | `/cv/cameras/{id}/test` | manager | Probe a stream once: latency, resolution, brightness, preview JPEG URL, error + actionable hint |
+| `GET` | `/cv/cameras/{id}/snapshot` | manager | A single live JPEG frame (dashboard preview) |
 | `POST` | `/cv/analyze` | manager | Multipart `gate_id`, `file`, optional `demo_scenario` |
 | `POST` | `/cv/analysis/{log_id}/confirm` | manager | Acknowledge a review decision |
 | `GET` | `/cv/actuators` | manager | Barrier driver config (masked), health, warnings and the last 10 commands per compound |
 | `POST` | `/cv/actuators/test` | manager | `{gate_id, action}` — sends one command through the real driver (audited) |
+
+`/cv/camera-health` example:
+
+```json
+{
+  "generated_at": "2026-11-01T10:41:03Z",
+  "stale_after_seconds": 60,
+  "counts": {"total": 3, "online": 2, "offline": 0, "error": 0, "disabled": 1, "stale": 0, "demo": 0},
+  "cameras": [
+    {
+      "camera_id": "d5061562-…",
+      "name": "Entry lane",
+      "gate_code": "GATE-IN",
+      "source": "rtsp://admin:***@10.0.0.11:554/Streaming/Channels/101",
+      "source_type": "rtsp",
+      "status": "online",
+      "stale": false,
+      "resolution": "1280x720",
+      "frame_age_seconds": 0.4,
+      "last_error": null,
+      "worker_alive": true,
+      "observed_fps": 4.6
+    }
+  ]
+}
+```
+
+`counts.online + offline + error + disabled == counts.total`; `stale` and `demo`
+are independent flags (a stale camera is still counted as online until it errors).
+
+`/cv/real-mode` returns `real_detections_only: true` only when `CV_MODE=real`
+**and** no demo camera exists — it is the one call to show a client that nothing
+on screen is simulated.
+
+`/cv/cameras/{id}/test` response:
+
+```json
+{
+  "ok": false,
+  "frames": 0,
+  "latency_ms": 5012,
+  "open_ms": 5000,
+  "width": null,
+  "height": null,
+  "brightness": null,
+  "preview_url": null,
+  "error": "Connection timed out",
+  "hint": "Connection timed out. Check that the API/CV host can reach the camera IP …"
+}
+```
 
 `/cv/analyze` runs the full pipeline on an uploaded frame and **persists** the
 detection, the access log and the barrier command, exactly like a live camera frame.

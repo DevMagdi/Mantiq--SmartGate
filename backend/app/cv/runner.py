@@ -34,6 +34,23 @@ def write_heartbeat() -> None:
         pass
 
 
+def read_heartbeat() -> dict[str, Any]:
+    """Return the heartbeat state (used by ``/health/ready`` and the dashboard)."""
+    try:
+        raw = HEARTBEAT_PATH.read_text(encoding="utf-8").strip()
+        written_at = float(raw)
+    except (OSError, ValueError):
+        return {"path": str(HEARTBEAT_PATH), "present": False, "age_seconds": None}
+    age = max(0.0, time.time() - written_at)
+    return {
+        "path": str(HEARTBEAT_PATH),
+        "present": True,
+        "age_seconds": round(age, 1),
+        "written_at": written_at,
+        "fresh": age < 90,
+    }
+
+
 async def _heartbeat_loop(interval: float = 15.0) -> None:
     while True:
         write_heartbeat()

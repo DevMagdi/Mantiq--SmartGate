@@ -46,6 +46,7 @@ class YOLOPlateDetector:
         self._model: Any | None = None
         self._load_error: str | None = None
         self._class_names: list[str] = []
+        self._plate_class_ids: set[int] | None = None
 
     @property
     def load_error(self) -> str | None:
@@ -71,6 +72,7 @@ class YOLOPlateDetector:
             names = getattr(self._model, "names", {}) or {}
             if isinstance(names, dict):
                 self._class_names = [str(value) for value in names.values()]
+            self._plate_class_ids = self._resolve_plate_classes()
             logger.info(
                 "Plate model classes: %s",
                 ", ".join(self._class_names) if self._class_names else "unnamed",
@@ -84,6 +86,35 @@ class YOLOPlateDetector:
             self._load_error = f"Failed to load plate model: {exc}"
             raise VisionEngineError(self._load_error) from exc
         logger.info("YOLO plate detector loaded from %s", self.model_path)
+
+    def _resolve_plate_classes(self) -> set[int] | None:
+        """Return the class ids that represent a plate, or ``None`` for all.
+
+        Multi-class models (COCO, traffic datasets) also detect cars, people and
+        signs; keeping only the plate classes is what stops a "car" box from
+        being sent to OCR. A single-class custom plate model has no matching
+        name, so every detection is kept.
+        """
+        wanted = {
+            token.strip().lower()
+            for token in (settings.CV_PLATE_CLASS_NAMES or "").split(",")
+            if token.strip()
+        }
+        if not wanted or not self._class_names:
+            return None
+        matched = {
+            index
+            for index, name in enumerate(self._class_names)
+            if name.strip().lower() in wanted
+        }
+        if not matched:
+            return None
+        logger.info(
+            "Plate detector will keep classes %s out of %s",
+            sorted(self._class_names[index] for index in matched),
+            len(self._class_names),
+        )
+        return matched
 
     def detect(self, image: Image) -> list[PlateDetection]:
         self.load()
@@ -119,11 +150,23 @@ class YOLOPlateDetector:
                     continue
                 label: str | None = None
                 cls_id = getattr(box, "cls", None)
-                if cls_id is not None and self._class_names:
+                class_index: int | None = None
+                if cls_id is not None:
                     try:
-                        label = self._class_names[int(cls_id[0])]
+                        class_index = int(cls_id[0])
                     except (IndexError, TypeError, ValueError):
+                        class_index = None
+                if class_index is not None and self._class_names:
+                    try:
+                        label = self._class_names[class_index]
+                    except IndexError:
                         label = None
+                if (
+                    class_index is not None
+                    and self._plate_class_ids is not None
+                    and class_index not in self._plate_class_ids
+                ):
+                    continue
                 detections.append(
                     PlateDetection(bbox=bbox, confidence=score, label=label)
                 )

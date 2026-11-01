@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     CV_YOLO_IOU: float = 0.45
     CV_YOLO_DEVICE: str = ""  # "" = auto (CUDA when present), "cpu", "0", "cuda:1"
     CV_YOLO_HALF: bool = False
+    # Class names used to pick plates out of a multi-class model. Ignored when
+    # the model has none of them (single-class custom plate weights).
+    CV_PLATE_CLASS_NAMES: str = "plate,license_plate,number_plate,plate_number"
     CV_OCR_ALLOWLIST: bool = True
 
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
@@ -227,6 +230,11 @@ class Settings(BaseSettings):
                 "CV_MODE=mock: detections are simulated, not read from cameras. "
                 "Set CV_MODE=real for a live deployment."
             )
+            if self.is_production:
+                issues.append(
+                    "CV_MODE=mock in a production environment: nothing on the Live Monitor is "
+                    "a real detection. Set CV_MODE=real before showing this to a client."
+                )
             return issues
         if (self.CV_PLATE_DETECTOR or "").lower() == "mock":
             issues.append("CV_PLATE_DETECTOR=mock in real mode: plates are simulated")
