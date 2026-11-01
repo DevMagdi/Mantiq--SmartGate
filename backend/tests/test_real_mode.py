@@ -1,0 +1,238 @@
+"""Real-mode guarantees: camera transport, stream probing and no fake detections."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.config import settings
+from app.core.exceptions import VisionEngineError
+from app.cv.sources import (
+    DemoFrameSource,
+    OpenCVFrameSource,
+    expand_env_source,
+    is_network_source,
+    normalise_capture_target,
+    redact_source,
+)
+from app.cv.utils import enhance_low_light, mean_brightness
+from app.cv.worker import CameraConfig, build_source
+
+API = "/api/v1"
+
+
+# --------------------------------------------------------------------- helpers
+def _camera_config(source_type: str, url: str) -> CameraConfig:
+    return CameraConfig(
+        camera_id=uuid.uuid4(),
+        gate_id=uuid.uuid4(),
+        compound_id=uuid.uuid4(),
+        name="Test lane",
+        gate_code="GATE-IN",
+        source_type=source_type,
+        source_url=url,
+    )
+
+
+class _FakeFrameSource:
+    """Stand-in for ``OpenCVFrameSource`` so probes run without a real camera."""
+
+    instances: list["_FakeFrameSource"] = []
+
+    fail_next = False
+
+    def __init__(self, url: str, name: str = "", **_: Any) -> None:
+        self.url = url
+        self.name = name
+        self.frames_read = 0
+        self.reconnects = 0
+        self.closed = False
+        self.fail = _FakeFrameSource.fail_next
+        _FakeFrameSource.instances.append(self)
+
+    def open(self) -> None:
+        if self.fail:
+            raise VisionEngineError("Unable to open camera stream: rtsp://camera/stream1")
+
+    def read(self) -> np.ndarray | None:
+        if self.fail:
+            return None
+        self.frames_read += 1
+        return np.full((720, 1280, 3), 40, dtype=np.uint8)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture()
+def fake_source(monkeypatch: pytest.MonkeyPatch) -> type[_FakeFrameSource]:
+    from app.services import camera_service as module
+
+    _FakeFrameSource.instances.clear()
+    monkeypatch.setattr(module, "OpenCVFrameSource", _FakeFrameSource)
+    monkeypatch.setattr(module, "SnapshotStore", lambda *a, **k: module.SnapshotStore())
+    return _FakeFrameSource
+
+
+# --------------------------------------------------------------- url handling
+def test_env_placeholders_are_expanded_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CAM_IN_PASS", "s3cret")
+    url = "rtsp://admin:${CAM_IN_PASS}@10.0.0.11:554/Streaming/Channels/101"
+    assert expand_env_source(url) == "rtsp://admin:s3cret@10.0.0.11:554/Streaming/Channels/101"
+    # Unknown variables stay visible instead of silently emptying the URL.
+    assert expand_env_source("rtsp://${NOPE}@host/1") == "rtsp://${NOPE}@host/1"
+
+
+def test_credentials_are_masked_and_never_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    redacted = redact_source("rtsp://admin:Sup3rS3cret@10.0.0.11:554/live")
+    assert "Sup3rS3cret" not in redacted
+    assert redacted == "rtsp://admin:***@10.0.0.11:554/live"
+    assert redact_source("0") == "0"
+
+
+def test_capture_targets_cover_rtsp_usb_and_files() -> None:
+    assert normalise_capture_target("rtsp://cam/1") == "rtsp://cam/1"
+    assert normalise_capture_target("0") == 0
+    assert normalise_capture_target("usb://1") == 1
+    assert normalise_capture_target("file:///data/clip.mp4") == "/data/clip.mp4"
+    assert is_network_source("http://cam/video.mjpg")
+    assert not is_network_source("usb://0")
+    with pytest.raises(VisionEngineError):
+        normalise_capture_target("usb://front")
+
+
+def test_source_reports_health_counters() -> None:
+    source = OpenCVFrameSource("rtsp://camera/1", name="Entry")
+    stats = source.stats()
+    assert stats["kind"] == "opencv"
+    assert stats["transport"] == "tcp"  # RTSP defaults to TCP for reliable plates
+    assert stats["frames_read"] == 0
+    assert "camera" in stats["source"]
+
+
+# ------------------------------------------------------------- real-mode guard
+def test_demo_cameras_are_refused_in_real_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CV_MODE", "real", raising=False)
+    monkeypatch.setattr(settings, "CV_ALLOW_DEMO_SOURCES", False, raising=False)
+    with pytest.raises(VisionEngineError):
+        build_source(_camera_config("demo", "demo://entry-lane"))
+
+
+def test_demo_cameras_are_allowed_in_mock_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CV_MODE", "mock", raising=False)
+    source = build_source(_camera_config("demo", "demo://entry-lane"))
+    assert isinstance(source, DemoFrameSource)
+
+
+def test_rtsp_cameras_build_in_real_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "CV_MODE", "real", raising=False)
+    source = build_source(_camera_config("rtsp", "rtsp://10.0.0.11/Streaming/Channels/101"))
+    assert isinstance(source, OpenCVFrameSource)
+
+
+def test_real_mode_engine_has_no_mock_components() -> None:
+    warnings = settings.cv_warnings()
+    if settings.CV_MODE == "mock":  # the test profile deliberately runs mock
+        assert any("simulated" in item for item in warnings)
+    else:
+        assert not any("simulated" in item for item in warnings)
+
+
+# ---------------------------------------------------------------- night frames
+def test_low_light_frames_are_brightened_for_ocr() -> None:
+    # A uniform image has no local contrast for CLAHE to lift, so use a real
+    # night-like gradient (IR foreground falling off towards the corners).
+    dark = np.tile(np.linspace(4, 34, 320, dtype=np.uint8)[None, :, None], (240, 1, 3))
+    brightened = enhance_low_light(dark)
+    assert mean_brightness(brightened) > mean_brightness(dark) + 5
+    assert brightened.shape == dark.shape
+
+
+# -------------------------------------------------------------------- probing
+def test_camera_probe_records_success(
+    client: TestClient, admin_headers: dict[str, str], fake_source: type[_FakeFrameSource]
+) -> None:
+    cameras = client.get(f"{API}/cameras?page_size=50", headers=admin_headers).json()["items"]
+    target = next(item for item in cameras if item["source_type"] == "rtsp")
+
+    response = client.post(f"{API}/cv/cameras/{target['id']}/test", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["frames"] >= 1
+    assert payload["width"] == 1280 and payload["height"] == 720
+    assert payload["preview_url"], "a preview frame must be stored for the operator"
+    assert payload["brightness"] is not None and payload["brightness"] < 60
+    assert payload["hint"] is None
+    # The camera row is updated so the dashboard reflects the probe.
+    refreshed = client.get(f"{API}/cameras/{target['id']}", headers=admin_headers)
+    assert refreshed.status_code == 200
+    row = refreshed.json()
+    assert row["status"] == "online"
+    assert row["resolution"] == "1280x720"
+
+
+def test_camera_probe_reports_actionable_failure(
+    client: TestClient, admin_headers: dict[str, str], fake_source: type[_FakeFrameSource]
+) -> None:
+    cameras = client.get(f"{API}/cameras?page_size=50", headers=admin_headers).json()["items"]
+    target = next(item for item in cameras if item["source_type"] == "rtsp")
+
+    _FakeFrameSource.fail_next = True
+    try:
+        response = client.post(f"{API}/cv/cameras/{target['id']}/test", headers=admin_headers)
+    finally:
+        _FakeFrameSource.fail_next = False
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]
+    assert payload["hint"], "a failed probe must suggest what to check next"
+
+
+def test_demo_camera_probe_is_rejected(
+    client: TestClient, admin_headers: dict[str, str], fake_source: type[_FakeFrameSource]
+) -> None:
+    cameras = client.get(f"{API}/cameras?page_size=50", headers=admin_headers).json()["items"]
+    demo_cameras = [item for item in cameras if item["source_type"] == "demo"]
+    if not demo_cameras:  # real-mode deployments have no demo rows
+        pytest.skip("no demo camera in this profile")
+    response = client.post(f"{API}/cv/cameras/{demo_cameras[0]['id']}/test", headers=admin_headers)
+    assert response.status_code == 400
+
+
+def test_camera_health_lists_every_camera_and_masks_urls(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    response = client.get(f"{API}/cv/camera-health", headers=admin_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == payload["counts"]["total"] >= 1
+    assert len(payload["cameras"]) == payload["total"]
+    assert payload["stale_after_seconds"] > 0
+    for camera in payload["cameras"]:
+        assert camera["gate_code"]
+        assert camera["source_type"] in {"rtsp", "demo", "usb", "file"}
+        assert "stale" in camera
+    # A resident must not be able to enumerate camera URLs.
+    assert client.get(f"{API}/cv/camera-health").status_code in {401, 403}
+
+
+def test_real_mode_status_is_explicit_about_simulation(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    response = client.get(f"{API}/cv/real-mode", headers=admin_headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] in {"mock", "real"}
+    assert isinstance(payload["real_detections_only"], bool)
+    assert payload["barrier_driver"]
+    assert "plate_detector" in payload["models"]
+    if payload["mode"] == "mock":
+        assert payload["real_detections_only"] is False
+        assert any("simulated" in item.lower() for item in payload["warnings"])

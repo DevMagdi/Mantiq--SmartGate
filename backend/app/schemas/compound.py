@@ -211,6 +211,7 @@ class CameraRead(ORMModel):
     status: CameraStatus
     fps_limit: float
     position: str
+    resolution: str | None = None
     last_frame_at: datetime | None
     last_error: str | None
     notes: str | None

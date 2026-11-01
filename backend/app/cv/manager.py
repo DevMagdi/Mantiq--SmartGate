@@ -297,6 +297,8 @@ class CameraManager:
                 camera.last_error = None
             elif update.error:
                 camera.last_error = update.error[:2000]
+            if update.resolution and camera.resolution != update.resolution:
+                camera.resolution = update.resolution
         if previous != update.status or update.status == CameraStatus.ERROR:
             await publish_event(
                 "camera.status",
@@ -308,6 +310,9 @@ class CameraManager:
                     "error": update.error,
                     "at": update.at.isoformat(),
                     "fps": round(update.fps, 2) if update.fps else None,
+                    "frames_read": update.frames_read,
+                    "reconnects": update.reconnects,
+                    "resolution": update.resolution,
                 },
             )
         if update.status == CameraStatus.ERROR:
@@ -347,6 +352,9 @@ class CameraManager:
                     "alive": worker.is_alive(),
                     "fps": round(worker.observed_fps, 2) if worker.observed_fps else None,
                     "last_error": worker.last_error,
+                    "resolution": worker.last_resolution,
+                    "frames_read": worker._source.frames_read if worker._source else 0,
+                    "reconnects": worker._source.reconnects if worker._source else 0,
                 }
                 for camera_id, worker in self._workers.items()
             ],

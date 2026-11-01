@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, Response, UploadFile, status
 
 from app.api.deps import CompoundScope, ManagerUser, SessionDep
 from app.core.events import publish_event
@@ -18,10 +18,12 @@ from app.schemas.access import (
     VisionAnalyzeResponse,
     VisionPipelineStatus,
 )
+from app.schemas.camera import CameraHealthResponse, CameraProbeResponse, RealModeStatus
 from app.schemas.common import Message
 from app.schemas.security import FaceGalleryInfo
 from app.services.access_service import access_service
 from app.services.cv_service import cv_service
+from app.services.camera_service import camera_service
 from app.services.detection_service import detection_service
 from app.services.face_service import face_service
 from app.services.gate_service import gate_service
@@ -155,11 +157,108 @@ async def test_actuator(
     )
 
 
-@router.get("/camera-health", summary="Camera status counts")
+@router.get(
+    "/camera-health",
+    response_model=CameraHealthResponse,
+    summary="Camera health for the fleet",
+    description=(
+        "Per-camera status, last frame age and the last stream error, merged with the "
+        "state of the live capture workers. A camera that stopped delivering frames is "
+        "reported as `stale` even when the last write said `online`."
+    ),
+)
 async def camera_health(
     session: SessionDep, manager: ManagerUser, compound_id: CompoundScope
-) -> dict[str, int]:
+) -> CameraHealthResponse:
     return await cv_service.camera_health(session, compound_id)
+
+
+@router.get(
+    "/real-mode",
+    response_model=RealModeStatus,
+    summary="Prove the deployment is running real detections",
+    description=(
+        "Returns the vision mode, loaded models, barrier driver and camera counts. "
+        "`real_detections_only` is true only when CV_MODE=real and no demo camera is "
+        "feeding the pipeline."
+    ),
+)
+async def real_mode_status(
+    session: SessionDep, manager: ManagerUser, compound_id: CompoundScope
+) -> RealModeStatus:
+    return await cv_service.real_mode_status(session, compound_id)
+
+
+@router.post(
+    "/cameras/{camera_id}/test",
+    response_model=CameraProbeResponse,
+    summary="Test a camera stream end-to-end",
+    description=(
+        "Opens the configured RTSP/USB source, reads a few frames, stores a preview "
+        "and records the result on the camera row. Use it right after saving a new "
+        "camera to confirm the URL, credentials and exposure are correct."
+    ),
+)
+async def test_camera(
+    camera_id: uuid.UUID, session: SessionDep, manager: ManagerUser
+) -> CameraProbeResponse:
+    camera = await camera_service.get(session, camera_id)
+    gate = await gate_service.get(session, camera.gate_id)
+    enforce_compound(manager, gate.compound_id)
+    result = await camera_service.probe(session, camera)
+    payload = result.as_dict()
+    payload["hint"] = _probe_hint(result)
+    return CameraProbeResponse.model_validate(payload)
+
+
+@router.get(
+    "/cameras/{camera_id}/snapshot",
+    summary="Grab one live frame from a camera",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}}},
+    description=(
+        "Returns a single JPEG frame straight from the camera. Used by the dashboard to "
+        "preview a stream without opening the full video pipeline."
+    ),
+)
+async def camera_snapshot(
+    camera_id: uuid.UUID, session: SessionDep, manager: ManagerUser
+) -> Response:
+    camera = await camera_service.get(session, camera_id)
+    gate = await gate_service.get(session, camera.gate_id)
+    enforce_compound(manager, gate.compound_id)
+    image = await camera_service.snapshot(camera)
+    return Response(content=image, media_type="image/jpeg")
+
+
+def _probe_hint(result: object) -> str | None:
+    """Turn a failed probe into an actionable next step."""
+    ok = getattr(result, "ok", False)
+    if ok:
+        return None
+    error = str(getattr(result, "error", "") or "")
+    lowered = error.lower()
+    if "401" in lowered or "unauthori" in lowered or "auth" in lowered:
+        return (
+            "The camera rejected the credentials. Verify the RTSP user/password and that "
+            "the camera allows RTSP (many vendors disable it by default)."
+        )
+    if "timed out" in lowered or "timeout" in lowered:
+        return (
+            "Connection timed out. Check that the API/CV host can reach the camera IP "
+            "(same VLAN, no client isolation) and that the port is 554."
+        )
+    if "refused" in lowered or "unreachable" in lowered or "no route" in lowered:
+        return (
+            "The host is unreachable. Ping the camera IP from the server that runs the CV "
+            "worker, then confirm the stream path (e.g. /Streaming/Channels/101 for Hikvision)."
+        )
+    if "usb" in lowered or "index" in lowered:
+        return "USB index not present. List devices with `v4l2-ctl --list-devices` (Linux)."
+    return (
+        "Check the full URL including the stream path and credentials, then re-run the test. "
+        "See docs/real-deployment.md → Troubleshooting."
+    )
 
 
 @router.post("/analysis/{log_id}/confirm", response_model=Message, summary="Confirm a review")

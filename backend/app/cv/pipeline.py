@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 import cv2
@@ -29,6 +30,8 @@ from app.cv.types import (
 )
 from app.cv.utils import (
     clean_plate_text,
+    enhance_low_light,
+    mean_brightness,
     normalize_plate,
     parse_plate,
     quality_score,
@@ -232,12 +235,25 @@ class GateVisionPipeline:
         for component in (self.plate_detector, self.plate_reader, self.face_detector):
             _inject_meta(component, meta)
 
-        plate, plate_warnings = self._read_plate(frame, options)
+        # Night frames: lift the shadows before detection/OCR. The snapshot that
+        # is stored stays the original frame so the audit trail shows reality.
+        brightness = mean_brightness(frame.image)
+        low_light = (
+            settings.CV_LOW_LIGHT_ENHANCE and brightness < settings.CV_LOW_LIGHT_THRESHOLD
+        )
+        work_frame = frame
+        if low_light:
+            work_frame = replace(
+                frame,
+                image=enhance_low_light(frame.image, settings.CV_LOW_LIGHT_CLIP_LIMIT),
+            )
+
+        plate, plate_warnings = self._read_plate(work_frame, options)
         face: FaceDetection | None = None
         face_match: FaceMatch | None = None
         face_warnings: list[str] = []
         if include_face and (options is None or options.include_face):
-            face, face_match, face_warnings = self._read_face(frame, gallery, options)
+            face, face_match, face_warnings = self._read_face(work_frame, gallery, options)
 
         snapshot_url: str | None = None
         plate_crop_url: str | None = None
@@ -280,6 +296,8 @@ class GateVisionPipeline:
                 "source_id": frame.source_id,
                 "sequence": frame.sequence,
                 "scenario": meta.get("scenario"),
+                "frame_brightness": round(brightness, 1),
+                "low_light_enhanced": low_light,
             },
         )
 

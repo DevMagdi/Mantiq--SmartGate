@@ -187,39 +187,75 @@ class SeedService:
         session.add_all([entry_gate, exit_gate, service_gate])
         await session.flush()
 
-        cameras = [
-            Camera(
-                gate_id=entry_gate.id,
-                name="Entry Lane Camera",
-                source_type=CameraSourceType.DEMO,
-                source_url="demo://entry-lane",
-                fps_limit=2.0,
-                position="front",
-                status=CameraStatus.OFFLINE,
-                notes="Simulated feed (CV_MODE=mock)",
-            ),
-            Camera(
-                gate_id=exit_gate.id,
-                name="Exit Lane Camera",
-                source_type=CameraSourceType.DEMO,
-                source_url="demo://exit-lane",
-                fps_limit=2.0,
-                position="front",
-                status=CameraStatus.OFFLINE,
-                notes="Simulated feed (CV_MODE=mock)",
-            ),
+        # In real mode the demo compound must not contain synthetic cameras:
+        # anything with source_type=demo produces invented detections, which is
+        # exactly what a live deployment must never do. Real cameras are added
+        # from the dashboard or through CAMERAS_JSON (see camera_service).
+        synth_cameras = settings.CV_MODE == "mock" or settings.CV_ALLOW_DEMO_SOURCES
+        if synth_cameras:
+            cameras = [
+                Camera(
+                    gate_id=entry_gate.id,
+                    name="Entry Lane Camera",
+                    source_type=CameraSourceType.DEMO,
+                    source_url="demo://entry-lane",
+                    fps_limit=2.0,
+                    position="front",
+                    status=CameraStatus.OFFLINE,
+                    notes="Simulated feed (CV_MODE=mock)",
+                ),
+                Camera(
+                    gate_id=exit_gate.id,
+                    name="Exit Lane Camera",
+                    source_type=CameraSourceType.DEMO,
+                    source_url="demo://exit-lane",
+                    fps_limit=2.0,
+                    position="front",
+                    status=CameraStatus.OFFLINE,
+                    notes="Simulated feed (CV_MODE=mock)",
+                ),
+            ]
+        else:
+            # Placeholder RTSP rows give the operator something to edit instead
+            # of an empty Cameras tab; they start disabled so nothing pretends
+            # to be online.
+            cameras = [
+                Camera(
+                    gate_id=entry_gate.id,
+                    name="Entry Lane Camera",
+                    source_type=CameraSourceType.RTSP,
+                    source_url="rtsp://<camera-ip>:554/Streaming/Channels/101",
+                    fps_limit=5.0,
+                    position="front",
+                    is_active=False,
+                    status=CameraStatus.DISABLED,
+                    notes="Replace with the real entry-lane RTSP URL, then test the stream",
+                ),
+                Camera(
+                    gate_id=exit_gate.id,
+                    name="Exit Lane Camera",
+                    source_type=CameraSourceType.RTSP,
+                    source_url="rtsp://<camera-ip>:554/Streaming/Channels/101",
+                    fps_limit=5.0,
+                    position="front",
+                    is_active=False,
+                    status=CameraStatus.DISABLED,
+                    notes="Replace with the real exit-lane RTSP URL, then test the stream",
+                ),
+            ]
+        cameras.append(
             Camera(
                 gate_id=service_gate.id,
                 name="Service Lane Camera",
                 source_type=CameraSourceType.RTSP,
-                source_url="rtsp://192.168.1.50:554/stream1",
+                source_url="rtsp://<camera-ip>:554/stream1",
                 fps_limit=3.0,
                 position="rear",
                 is_active=False,
                 status=CameraStatus.DISABLED,
                 notes="A real RTSP camera can be enabled here",
-            ),
-        ]
+            )
+        )
         session.add_all(cameras)
 
         # ---------------------------------------------------------------- units

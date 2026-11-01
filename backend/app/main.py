@@ -71,6 +71,27 @@ async def _startup_tasks(app: FastAPI) -> None:
         except Exception:  # pragma: no cover - defensive: never block boot on seed
             logger.exception("Startup seeding failed; continuing without demo data")
 
+    # Cameras declared in CAMERAS_JSON are applied on every boot so a compose
+    # file (or a k8s ConfigMap) is enough to wire up a real site.
+    if (settings.CAMERAS_JSON or "").strip():
+        try:
+            from app.db.session import session_scope
+            from app.services.camera_service import camera_service
+
+            async with session_scope() as session:
+                created = await camera_service.ensure_from_env(session)
+            if created:
+                logger.info("Cameras imported from CAMERAS_JSON: %s", ", ".join(created))
+        except Exception:  # pragma: no cover - never block boot on camera config
+            logger.exception("Could not apply CAMERAS_JSON")
+
+    if settings.CV_MODE == "mock":
+        logger.warning(
+            "CV_MODE=mock — detections are SIMULATED. Set CV_MODE=real for a live deployment."
+        )
+    for warning in settings.cv_warnings():
+        logger.warning("Vision configuration: %s", warning)
+
     set_app_info(__version__, settings.ENVIRONMENT, settings.CV_MODE)
     set_engine_state(ready=settings.CV_MODE == "mock", mode=settings.CV_MODE)
     await get_event_bus().start()
