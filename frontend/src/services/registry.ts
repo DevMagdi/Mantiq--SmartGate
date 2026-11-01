@@ -4,6 +4,8 @@ import type {
   Resident,
   ResidentStatus,
   Unit,
+  UnitStatus,
+  UnitType,
   Vehicle,
   VehicleStatus,
   VehicleType,
@@ -52,9 +54,28 @@ export async function deleteResident(id: string): Promise<MessageResponse> {
   return data;
 }
 
+export interface UnitListParams extends PageParams {
+  status?: UnitStatus;
+  unit_type?: UnitType;
+  building?: string;
+  search?: string;
+}
+
+/** Every field the API accepts on ``POST/PATCH /compounds/{id}/units``. */
+export interface UnitPayload {
+  building: string;
+  unit_number: string;
+  floor?: number;
+  unit_type?: UnitType;
+  status?: UnitStatus;
+  bedrooms?: number | null;
+  area_sqm?: number | null;
+  notes?: string | null;
+}
+
 export async function listUnits(
   compoundId: string,
-  params: PageParams = {},
+  params: UnitListParams = {},
 ): Promise<Page<Unit>> {
   const { data } = await api.get<Page<Unit>>(`/compounds/${compoundId}/units`, {
     params: { page_size: 200, ...params },
@@ -64,9 +85,31 @@ export async function listUnits(
 
 export async function createUnit(
   compoundId: string,
-  payload: Record<string, unknown>,
+  payload: UnitPayload,
 ): Promise<Unit> {
   const { data } = await api.post<Unit>(`/compounds/${compoundId}/units`, payload);
+  return data;
+}
+
+export async function updateUnit(
+  compoundId: string,
+  unitId: string,
+  payload: Partial<UnitPayload>,
+): Promise<Unit> {
+  const { data } = await api.patch<Unit>(
+    `/compounds/${compoundId}/units/${unitId}`,
+    payload,
+  );
+  return data;
+}
+
+export async function deleteUnit(
+  compoundId: string,
+  unitId: string,
+): Promise<MessageResponse> {
+  const { data } = await api.delete<MessageResponse>(
+    `/compounds/${compoundId}/units/${unitId}`,
+  );
   return data;
 }
 

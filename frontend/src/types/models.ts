@@ -88,6 +88,102 @@ export interface CompoundBrief {
   code: string;
 }
 
+/** Per-compound CV thresholds (``GET /compounds/{id}/settings`` → ``effective.vision``). */
+export interface CompoundVisionPolicy {
+  plate_confidence_threshold: number;
+  ocr_min_confidence: number;
+  face_similarity_threshold: number;
+  face_min_quality: number;
+  face_min_resolution: number;
+  face_min_blur: number;
+  face_min_brightness: number;
+  face_max_brightness: number;
+  face_min_face_ratio: number;
+  max_embeddings_per_resident: number;
+  duplicate_similarity_threshold: number;
+  reject_duplicate_enrollment: boolean;
+}
+
+/** Decision-engine switches for one compound. */
+export interface CompoundAccessPolicy {
+  auto_open_barrier: boolean;
+  allow_face_only_entry: boolean;
+  unknown_vehicle_decision: "unknown" | "review" | "deny";
+  require_face_for_vehicle: boolean;
+  exit_grace_minutes: number;
+  allow_blacklist_exit: boolean;
+  allow_visitor_exit_after_expiry: boolean;
+}
+
+export interface CompoundWebhookPolicy {
+  url: string | null;
+  /** Masked as ``********`` on read; omit it to keep the stored secret. */
+  secret: string | null;
+  timeout_seconds: number;
+  retries: number;
+  verify_tls: boolean;
+}
+
+export interface CompoundMqttPolicy {
+  host: string;
+  port: number;
+  topic: string;
+  qos: number;
+  username: string | null;
+  /** Masked as ``********`` on read; omit it to keep the stored password. */
+  password: string | null;
+  tls: boolean;
+  client_id: string;
+  simulate: boolean;
+}
+
+export interface CompoundGpioPolicy {
+  open_pin: number;
+  close_pin: number;
+  hold_pin: number | null;
+  active_high: boolean;
+  pulse_seconds: number;
+  backend: string;
+  simulate: boolean;
+}
+
+export interface CompoundBarrierPolicy {
+  driver: BarrierDriver;
+  simulator_latency_ms: number;
+  simulator_failure_rate: number;
+  webhook: CompoundWebhookPolicy;
+  mqtt: CompoundMqttPolicy;
+  gpio: CompoundGpioPolicy;
+}
+
+export interface CompoundPolicy {
+  vision: CompoundVisionPolicy;
+  access: CompoundAccessPolicy;
+  barrier: CompoundBarrierPolicy;
+}
+
+export interface CompoundSettings {
+  compound_id: string;
+  /** Stored document (kept for forward compatibility with new keys). */
+  raw: Record<string, unknown>;
+  effective: CompoundPolicy;
+  defaults: CompoundPolicy;
+}
+
+/** Partial PATCH body — every section and field is optional. */
+export interface CompoundSettingsPatch {
+  vision?: Partial<CompoundVisionPolicy>;
+  access?: Partial<CompoundAccessPolicy>;
+  barrier?: {
+    driver?: BarrierDriver;
+    simulator_latency_ms?: number;
+    simulator_failure_rate?: number;
+    webhook?: Partial<CompoundWebhookPolicy>;
+    mqtt?: Partial<CompoundMqttPolicy>;
+    gpio?: Partial<CompoundGpioPolicy>;
+  };
+}
+
 export interface Camera {
   id: string;
   gate_id: string;

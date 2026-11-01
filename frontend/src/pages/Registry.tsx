@@ -29,25 +29,31 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useToast } from "@/hooks/useToast";
 import {
   createResident,
+  createUnit,
   createVehicle,
   deleteResident,
+  deleteUnit,
   deleteVehicle,
   getMyResidentProfile,
   listResidents,
   listUnits,
   listVehicles,
   updateResident,
+  updateUnit,
   updateVehicle,
   type ResidentPayload,
+  type UnitPayload,
   type VehiclePayload,
 } from "@/services/registry";
 import { listCompounds } from "@/services/admin";
-import { apiErrorMessage } from "@/services/api";
+import { apiErrorMessage, getApiError } from "@/services/api";
 import type {
   Resident,
   ResidentRelationship,
   ResidentStatus,
   Unit,
+  UnitStatus,
+  UnitType,
   Vehicle,
   VehicleStatus,
   VehicleType,
@@ -58,7 +64,10 @@ import {
 } from "@/utils/constants";
 import { formatDate, formatDateTime, initials } from "@/utils/format";
 
-type TabKey = "residents" | "vehicles";
+type TabKey = "residents" | "vehicles" | "units";
+
+const UNIT_TYPES: UnitType[] = ["apartment", "villa", "townhouse", "office", "other"];
+const UNIT_STATUSES: UnitStatus[] = ["occupied", "vacant"];
 
 interface ResidentForm {
   full_name: string;
@@ -72,6 +81,17 @@ interface ResidentForm {
   notes: string;
   create_account: boolean;
   account_password: string;
+}
+
+interface UnitForm {
+  building: string;
+  unit_number: string;
+  floor: string;
+  unit_type: UnitType;
+  status: UnitStatus;
+  bedrooms: string;
+  area_sqm: string;
+  notes: string;
 }
 
 interface VehicleForm {
@@ -99,6 +119,17 @@ const EMPTY_RESIDENT: ResidentForm = {
   notes: "",
   create_account: false,
   account_password: "",
+};
+
+const EMPTY_UNIT: UnitForm = {
+  building: "",
+  unit_number: "",
+  floor: "0",
+  unit_type: "apartment",
+  status: "vacant",
+  bedrooms: "",
+  area_sqm: "",
+  notes: "",
 };
 
 const EMPTY_VEHICLE: VehicleForm = {
@@ -139,9 +170,15 @@ export function RegistryPage(): JSX.Element {
   const [vehicleForm, setVehicleForm] = useState<VehicleForm>(EMPTY_VEHICLE);
   const [vehicleToDelete, setVehicleToDelete] = useState<Vehicle | null>(null);
 
+  const [unitOpen, setUnitOpen] = useState(false);
+  const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
+  const [unitForm, setUnitForm] = useState<UnitForm>(EMPTY_UNIT);
+  const [unitToDelete, setUnitToDelete] = useState<Unit | null>(null);
+  const [unitTypeFilter, setUnitTypeFilter] = useState("");
+
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, statusFilter, tab]);
+  }, [debouncedSearch, statusFilter, tab, unitTypeFilter]);
 
   const compounds = useQuery({
     queryKey: ["compounds"],
@@ -149,10 +186,30 @@ export function RegistryPage(): JSX.Element {
     enabled: isManager,
   });
   const compound = compounds.data?.items[0];
+  // One unfiltered cache entry feeds the resident dropdown (and Visitors),
+  // so invalidating ["units", compoundId] refreshes every consumer at once.
   const units = useQuery({
     queryKey: ["units", compound?.id],
     queryFn: () => listUnits(compound!.id),
     enabled: isManager && Boolean(compound?.id),
+  });
+
+  // The Units tab applies the filters server-side; it shares the "units"
+  // prefix so a single invalidation keeps both views in sync.
+  const unitsList = useQuery({
+    queryKey: [
+      "units",
+      compound?.id,
+      "filtered",
+      { search: debouncedSearch, status: statusFilter, unitType: unitTypeFilter },
+    ],
+    queryFn: () =>
+      listUnits(compound!.id, {
+        search: debouncedSearch || undefined,
+        status: (statusFilter || undefined) as UnitStatus | undefined,
+        unit_type: (unitTypeFilter || undefined) as UnitType | undefined,
+      }),
+    enabled: isManager && Boolean(compound?.id) && tab === "units",
   });
 
   const myProfile = useQuery({
@@ -204,6 +261,16 @@ export function RegistryPage(): JSX.Element {
     await queryClient.invalidateQueries({ queryKey: ["vehicles"] });
     await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     await queryClient.invalidateQueries({ queryKey: ["my-resident-profile"] });
+    // Unit occupancy follows its residents, and the visitor/permit forms read
+    // the same key, so always refresh it alongside the registry.
+    await queryClient.invalidateQueries({ queryKey: ["units", compound?.id] });
+  };
+
+  const invalidateUnits = async (): Promise<void> => {
+    await queryClient.invalidateQueries({ queryKey: ["units", compound?.id] });
+    await queryClient.invalidateQueries({ queryKey: ["units"] });
+    await queryClient.invalidateQueries({ queryKey: ["residents"] });
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   };
 
   const residentMutation = useMutation({
@@ -291,6 +358,65 @@ export function RegistryPage(): JSX.Element {
     onError: (error) => toast.error(t("registry.toast.vehicle_error"), apiErrorMessage(error)),
   });
 
+  const unitMutation = useMutation({
+    mutationFn: async (): Promise<void> => {
+      if (!compound) throw new Error(t("registry.error.no_compound"));
+      const payload: UnitPayload = {
+        building: unitForm.building.trim(),
+        unit_number: unitForm.unit_number.trim(),
+        floor: Number(unitForm.floor) || 0,
+        unit_type: unitForm.unit_type,
+        status: unitForm.status,
+        bedrooms: unitForm.bedrooms === "" ? null : Number(unitForm.bedrooms),
+        area_sqm: unitForm.area_sqm === "" ? null : Number(unitForm.area_sqm),
+        notes: unitForm.notes.trim() || null,
+      };
+      if (editingUnit) {
+        await updateUnit(compound.id, editingUnit.id, payload);
+      } else {
+        await createUnit(compound.id, payload);
+      }
+    },
+    onSuccess: async () => {
+      toast.success(editingUnit ? t("registry.toast.unit_updated") : t("registry.toast.unit_created"));
+      setUnitOpen(false);
+      setEditingUnit(null);
+      setUnitForm(EMPTY_UNIT);
+      await invalidateUnits();
+    },
+    onError: (error) => {
+      const code = getApiError(error).code;
+      toast.error(
+        t("registry.toast.unit_error"),
+        code === "unit_exists" ? t("registry.error.unit_exists") : apiErrorMessage(error),
+      );
+    },
+  });
+
+  const deleteUnitMutation = useMutation({
+    mutationFn: async (unit: Unit): Promise<void> => {
+      if (!compound) throw new Error(t("registry.error.no_compound"));
+      await deleteUnit(compound.id, unit.id);
+    },
+    onSuccess: async () => {
+      toast.success(t("registry.toast.unit_removed"));
+      setUnitToDelete(null);
+      await invalidateUnits();
+    },
+    onError: (error) => {
+      const code = getApiError(error).code;
+      toast.error(
+        t("registry.toast.unit_remove_error"),
+        code === "unit_has_residents"
+          ? t("registry.error.unit_has_residents")
+          : apiErrorMessage(error),
+      );
+      // The backend refuses to orphan residents; close the dialog so the
+      // officer can reassign them instead of retrying a doomed delete.
+      setUnitToDelete(null);
+    },
+  });
+
   const deleteResidentMutation = useMutation({
     mutationFn: (resident: Resident) => deleteResident(resident.id),
     onSuccess: async () => {
@@ -335,6 +461,36 @@ export function RegistryPage(): JSX.Element {
     setResidentOpen(true);
   };
 
+  const openCreateUnit = (): void => {
+    setEditingUnit(null);
+    setUnitForm(EMPTY_UNIT);
+    setUnitOpen(true);
+  };
+
+  const openEditUnit = (unit: Unit): void => {
+    setEditingUnit(unit);
+    setUnitForm({
+      building: unit.building,
+      unit_number: unit.unit_number,
+      floor: String(unit.floor),
+      unit_type: unit.unit_type,
+      status: unit.status,
+      bedrooms: unit.bedrooms === null ? "" : String(unit.bedrooms),
+      area_sqm: unit.area_sqm === null ? "" : String(unit.area_sqm),
+      notes: unit.notes ?? "",
+    });
+    setUnitOpen(true);
+  };
+
+  /** Jump from the resident form (which needs a unit) to the unit form. */
+  const switchToUnitCreation = (): void => {
+    setResidentOpen(false);
+    setEditingResident(null);
+    setResidentForm(EMPTY_RESIDENT);
+    setTab("units");
+    openCreateUnit();
+  };
+
   const openCreateVehicle = (residentId?: string): void => {
     setEditingVehicle(null);
     setVehicleForm({ ...EMPTY_VEHICLE, resident_id: residentId ?? "" });
@@ -358,7 +514,94 @@ export function RegistryPage(): JSX.Element {
     setVehicleOpen(true);
   };
 
-  const activeQuery = tab === "residents" ? residentsQuery : vehiclesQuery;
+  const activeQuery =
+    tab === "residents" ? residentsQuery : tab === "units" ? unitsList : vehiclesQuery;
+
+  const renderUnitsTab = (): JSX.Element => {
+    const unitRows = unitsList.data?.items ?? [];
+    const filtersActive = Boolean(debouncedSearch || statusFilter || unitTypeFilter);
+    if (unitRows.length === 0) {
+      return filtersActive ? (
+        <EmptyState
+          icon="gate"
+          title={t("registry.units.filtered_empty")}
+          description={t("registry.units.filtered_empty_desc")}
+          action={
+            <Button
+              variant="outline"
+              icon="refresh"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("");
+                setUnitTypeFilter("");
+              }}
+            >
+              {t("common.clear")}
+            </Button>
+          }
+        />
+      ) : (
+        <EmptyState
+          icon="gate"
+          title={t("registry.units.empty_title")}
+          description={t("registry.units.empty_desc")}
+          action={<Button icon="plus" onClick={openCreateUnit}>{t("registry.add_unit")}</Button>}
+        />
+      );
+    }
+    return (
+      <>
+        <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3 dark:border-ink-800">
+          <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{t("registry.units.registered")}</p>
+          <span className="text-[11px] text-ink-400">{t("registry.units.shown", { count: unitRows.length })}</span>
+        </div>
+        <TableShell>
+          <thead>
+            <tr>
+              <Th>{t("registry.table.unit")}</Th>
+              <Th>{t("registry.table.floor")}</Th>
+              <Th>{t("common.type")}</Th>
+              <Th>{t("common.status")}</Th>
+              <Th>{t("registry.table.bedrooms")}</Th>
+              <Th>{t("registry.table.area")}</Th>
+              <Th align="right">{t("common.actions")}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {unitRows.map((unit) => (
+              <tr key={unit.id} className="transition hover:bg-ink-50/70 dark:hover:bg-ink-800/30">
+                <Td>
+                  <p className="font-mono text-sm font-semibold text-ink-900 dark:text-ink-100">{unit.label}</p>
+                  <p className="text-[10px] text-ink-400">
+                    {t("registry.units.building_line", { building: unit.building, number: unit.unit_number })}
+                  </p>
+                </Td>
+                <Td className="text-xs">{unit.floor}</Td>
+                <Td className="text-xs">{t(`unit_type.${unit.unit_type}`)}</Td>
+                <Td>
+                  <Badge tone={unit.status === "occupied" ? "info" : "neutral"} dot>
+                    {t(`status.${unit.status}`)}
+                  </Badge>
+                </Td>
+                <Td className="text-xs">{unit.bedrooms ?? "—"}</Td>
+                <Td className="text-xs">{unit.area_sqm !== null ? `${unit.area_sqm} m²` : "—"}</Td>
+                <Td align="right">
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="icon" onClick={() => openEditUnit(unit)} aria-label={t("registry.action.edit_unit")}>
+                      <Icon name="edit" className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => setUnitToDelete(unit)} aria-label={t("registry.action.delete_unit")}>
+                      <Icon name="trash" className="h-4 w-4 text-rose-500" />
+                    </Button>
+                  </div>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </TableShell>
+      </>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -367,22 +610,47 @@ export function RegistryPage(): JSX.Element {
         title={isManager ? t("registry.title.manager") : t("registry.title.resident")}
         subtitle={isManager ? t("registry.subtitle.manager") : t("registry.subtitle.resident")}
         actions={
-          isManager ? (
+          isManager && compound ? (
             <>
-              <Button variant="outline" icon="car" onClick={() => openCreateVehicle()}>
-                {t("registry.add_vehicle")}
-              </Button>
-              <Button icon="plus" onClick={openCreateResident}>
-                {t("registry.add_resident")}
+              {tab === "units" ? (
+                <Button variant="outline" icon="users" onClick={openCreateResident}>
+                  {t("registry.add_resident")}
+                </Button>
+              ) : (
+                <Button variant="outline" icon="car" onClick={() => openCreateVehicle()}>
+                  {t("registry.add_vehicle")}
+                </Button>
+              )}
+              <Button icon="plus" onClick={tab === "units" ? openCreateUnit : openCreateResident}>
+                {tab === "units" ? t("registry.add_unit") : t("registry.add_resident")}
               </Button>
             </>
-          ) : (
+          ) : isManager ? null : (
             <Button variant="outline" icon="visitors" onClick={() => navigate("/visitors")}>
               {t("registry.invite")}
             </Button>
           )
         }
       />
+
+      {/* A brand-new install has no compound yet: point the admin at the
+          Settings screen instead of showing forms that cannot be submitted. */}
+      {isManager && compounds.isLoading ? (
+        <Card><LoadingBlock label={t("registry.loading_compound")} /></Card>
+      ) : null}
+
+      {isManager && !compounds.isLoading && !compound ? (
+        <EmptyState
+          icon="gate"
+          title={t("registry.no_compound.title")}
+          description={t("registry.no_compound.desc")}
+          action={
+            <Button icon="gate" onClick={() => navigate("/settings")}>
+              {t("registry.no_compound.action")}
+            </Button>
+          }
+        />
+      ) : null}
 
       {!isManager && myProfile.isLoading ? (
         <Card><LoadingBlock label={t("registry.loading_household")} /></Card>
@@ -436,28 +704,55 @@ export function RegistryPage(): JSX.Element {
         </div>
       ) : null}
 
-      {isManager ? (
+      {isManager && compound ? (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Tabs
             tabs={[
               { key: "residents", label: t("registry.tab.residents"), count: residentsQuery.data?.total },
+              { key: "units", label: t("registry.tab.units"), count: units.data?.total },
               { key: "vehicles", label: t("registry.tab.vehicles"), count: vehiclesQuery.data?.total },
             ]}
             value={tab}
-            onChange={(key) => setTab(key)}
+            onChange={(key) => {
+              setTab(key);
+              setStatusFilter("");
+              setSearch("");
+              setUnitTypeFilter("");
+            }}
           />
           <div className="flex flex-wrap items-center gap-2">
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder={tab === "residents" ? t("registry.search.residents") : t("registry.search.vehicles")}
+              placeholder={
+                tab === "residents"
+                  ? t("registry.search.residents")
+                  : tab === "units"
+                    ? t("registry.search.units")
+                    : t("registry.search.vehicles")
+              }
               className="w-full sm:w-64"
             />
+            {tab === "units" ? (
+              <Select
+                value={unitTypeFilter}
+                onChange={(event) => setUnitTypeFilter(event.target.value)}
+                className="w-40"
+                aria-label={t("registry.filter.unit_type")}
+              >
+                <option value="">{t("registry.filter.all_types")}</option>
+                {UNIT_TYPES.map((value) => (
+                  <option key={value} value={value}>{t(`unit_type.${value}`)}</option>
+                ))}
+              </Select>
+            ) : null}
             <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-36">
               <option value="">{t("common.all_statuses")}</option>
               {(tab === "residents"
                 ? ["active", "inactive", "moved_out"]
-                : ["active", "suspended", "inactive"]
+                : tab === "units"
+                  ? UNIT_STATUSES
+                  : ["active", "suspended", "inactive"]
               ).map((value) => (
                 <option key={value} value={value}>{t(`status.${value}`)}</option>
               ))}
@@ -466,9 +761,13 @@ export function RegistryPage(): JSX.Element {
         </div>
       ) : null}
 
-      <Card>
+      {/* Residents have no compound query (it is manager-scoped), so their
+          household card must never be hidden by the manager guard below. */}
+      {compound || !isManager ? <Card>
         {activeQuery.isLoading ? (
           <LoadingBlock />
+        ) : tab === "units" && isManager ? (
+          renderUnitsTab()
         ) : tab === "residents" && isManager ? (
           residentsQuery.data && residentsQuery.data.items.length > 0 ? (
             <>
@@ -635,7 +934,7 @@ export function RegistryPage(): JSX.Element {
             );
           })()
         )}
-      </Card>
+      </Card> : null}
 
       <Modal
         open={residentOpen}
@@ -649,7 +948,12 @@ export function RegistryPage(): JSX.Element {
             <Button
               onClick={() => residentMutation.mutate()}
               loading={residentMutation.isPending}
-              disabled={!residentForm.full_name.trim() || !residentForm.unit_id}
+              disabled={
+                !compound ||
+                !residentForm.full_name.trim() ||
+                !residentForm.unit_id ||
+                unitOptions.length === 0
+              }
             >
               {editingResident ? t("common.save_changes") : t("registry.register_resident")}
             </Button>
@@ -683,21 +987,46 @@ export function RegistryPage(): JSX.Element {
             onChange={(event) => setResidentForm({ ...residentForm, email: event.target.value })}
             placeholder="resident@example.com"
           />
-          <Select
-            label={t("common.unit")}
-            required
-            value={residentForm.unit_id}
-            onChange={(event) => setResidentForm({ ...residentForm, unit_id: event.target.value })}
-            disabled={Boolean(editingResident)}
-            hint={editingResident ? t("registry.form.unit_locked_hint") : undefined}
-          >
-            <option value="">{t("registry.form.select_unit")}</option>
-            {unitOptions.map((unit: Unit) => (
-              <option key={unit.id} value={unit.id}>
-                {unit.building} · {unit.label} · {unit.status}
-              </option>
-            ))}
-          </Select>
+          {!editingResident && units.isLoading ? (
+            <div className="sm:col-span-2 rounded-xl border border-ink-200 p-3 dark:border-ink-700">
+              <LoadingBlock label={t("registry.loading_units")} />
+            </div>
+          ) : !editingResident && unitOptions.length === 0 ? (
+            <div className="rounded-xl border border-amber-300 bg-amber-50/80 p-3 sm:col-span-2 dark:border-amber-500/40 dark:bg-amber-500/10">
+              <p className="flex items-center gap-2 text-xs font-semibold text-amber-800 dark:text-amber-200">
+                <Icon name="alert" className="h-4 w-4 shrink-0" />
+                {t("registry.units.none_for_resident_title")}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                {t("registry.units.none_for_resident_desc")}
+              </p>
+              <Button size="sm" variant="outline" icon="plus" className="mt-2" onClick={switchToUnitCreation}>
+                {t("registry.add_unit")}
+              </Button>
+            </div>
+          ) : (
+            <Select
+              label={t("common.unit")}
+              required
+              value={residentForm.unit_id}
+              onChange={(event) => setResidentForm({ ...residentForm, unit_id: event.target.value })}
+              disabled={Boolean(editingResident)}
+              hint={
+                editingResident
+                  ? t("registry.form.unit_locked_hint")
+                  : unitOptions.length > 0
+                    ? t("registry.form.unit_hint")
+                    : undefined
+              }
+            >
+              <option value="">{t("registry.form.select_unit")}</option>
+              {unitOptions.map((unit: Unit) => (
+                <option key={unit.id} value={unit.id}>
+                  {unit.building} · {unit.unit_number} · {t(`status.${unit.status}`)}
+                </option>
+              ))}
+            </Select>
+          )}
           <Select
             label={t("registry.form.relation")}
             value={residentForm.role_in_unit}
@@ -763,7 +1092,11 @@ export function RegistryPage(): JSX.Element {
         footer={
           <>
             <Button variant="outline" onClick={() => setVehicleOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => vehicleMutation.mutate()} loading={vehicleMutation.isPending} disabled={vehicleForm.plate_number.trim().length < 3}>
+            <Button
+              onClick={() => vehicleMutation.mutate()}
+              loading={vehicleMutation.isPending}
+              disabled={!compound || vehicleForm.plate_number.trim().length < 3}
+            >
               {editingVehicle ? t("common.save_changes") : t("registry.register_vehicle")}
             </Button>
           </>
@@ -808,6 +1141,106 @@ export function RegistryPage(): JSX.Element {
           <Textarea label={t("common.notes")} value={vehicleForm.notes} onChange={(event) => setVehicleForm({ ...vehicleForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
+
+      <Modal
+        open={unitOpen}
+        onClose={() => setUnitOpen(false)}
+        title={editingUnit ? t("registry.modal.edit_unit") : t("registry.modal.create_unit")}
+        description={t("registry.modal.unit_desc")}
+        size="lg"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setUnitOpen(false)}>{t("common.cancel")}</Button>
+            <Button
+              onClick={() => unitMutation.mutate()}
+              loading={unitMutation.isPending}
+              disabled={!compound || !unitForm.building.trim() || !unitForm.unit_number.trim()}
+            >
+              {editingUnit ? t("common.save_changes") : t("registry.create_unit")}
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Input
+            label={t("registry.form.building")}
+            required
+            value={unitForm.building}
+            onChange={(event) => setUnitForm({ ...unitForm, building: event.target.value })}
+            placeholder={t("registry.form.building_placeholder")}
+          />
+          <Input
+            label={t("registry.form.unit_number")}
+            required
+            value={unitForm.unit_number}
+            onChange={(event) => setUnitForm({ ...unitForm, unit_number: event.target.value })}
+            placeholder={t("registry.form.unit_number_placeholder")}
+            className="font-mono"
+          />
+          <Input
+            label={t("registry.form.floor")}
+            type="number"
+            min={-5}
+            max={200}
+            value={unitForm.floor}
+            onChange={(event) => setUnitForm({ ...unitForm, floor: event.target.value })}
+          />
+          <Select
+            label={t("registry.form.unit_type")}
+            value={unitForm.unit_type}
+            onChange={(event) => setUnitForm({ ...unitForm, unit_type: event.target.value as UnitType })}
+          >
+            {UNIT_TYPES.map((value) => (
+              <option key={value} value={value}>{t(`unit_type.${value}`)}</option>
+            ))}
+          </Select>
+          <Select
+            label={t("common.status")}
+            value={unitForm.status}
+            onChange={(event) => setUnitForm({ ...unitForm, status: event.target.value as UnitStatus })}
+            hint={t("registry.form.unit_status_hint")}
+          >
+            {UNIT_STATUSES.map((value) => (
+              <option key={value} value={value}>{t(`status.${value}`)}</option>
+            ))}
+          </Select>
+          <Input
+            label={t("registry.form.bedrooms")}
+            type="number"
+            min={0}
+            max={50}
+            value={unitForm.bedrooms}
+            onChange={(event) => setUnitForm({ ...unitForm, bedrooms: event.target.value })}
+            placeholder={t("common.optional")}
+          />
+          <Input
+            label={t("registry.form.area")}
+            type="number"
+            min={1}
+            step="0.1"
+            value={unitForm.area_sqm}
+            onChange={(event) => setUnitForm({ ...unitForm, area_sqm: event.target.value })}
+            placeholder={t("registry.form.area_placeholder")}
+          />
+          <Textarea
+            label={t("common.notes")}
+            value={unitForm.notes}
+            onChange={(event) => setUnitForm({ ...unitForm, notes: event.target.value })}
+            className="sm:col-span-2"
+            placeholder={t("registry.form.unit_notes_placeholder")}
+          />
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={unitToDelete !== null}
+        onClose={() => setUnitToDelete(null)}
+        onConfirm={() => unitToDelete && deleteUnitMutation.mutate(unitToDelete)}
+        loading={deleteUnitMutation.isPending}
+        title={t("registry.delete_unit.title")}
+        description={t("registry.delete_unit.desc", { unit: unitToDelete?.label ?? t("common.unit") })}
+        confirmLabel={t("registry.delete_unit.confirm")}
+      />
 
       <ConfirmDialog
         open={residentToDelete !== null}

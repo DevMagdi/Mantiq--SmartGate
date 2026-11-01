@@ -44,6 +44,10 @@ operations that work on a single box or in Docker Compose.
 - Live gate monitor: WebSocket feed, pause/freeze, gate filter, per-event review,
   barrier open/close/hold, image analysis playground, manual-entry recording.
 - Residents & vehicles registry (units, ownership, stickers, plate uniqueness).
+- Units managed end-to-end from **Registry → Units**: create, edit and delete
+  units with status/type/search filters; a unit that still has residents is
+  refused with an actionable message, and the resident form links straight to
+  unit creation when the compound has none yet.
 - Visitors and time-boxed temporary permits (window, entry limit, plate binding,
   revoke with reason, resident self-service requests).
 - Access logs with compound/gate/decision/direction/plate/date/override filters,
@@ -469,9 +473,10 @@ Then prepare the data:
 - **[docs/face-enrollment.md](docs/face-enrollment.md)** — resident/vehicle
   registration, the enrollment quality gates (and how to read each rejection),
   gallery pruning and biometric erasure.
-- Configure barricade policy per compound in **Settings → Gate policy** or
+- Configure barricade policy per compound in **Settings → Policy & barrier** or
   `PATCH /api/v1/compounds/{id}/settings` (vision thresholds, access rules,
-  barrier driver). Secrets are masked on read and round-trip safely.
+  barrier driver: simulator, webhook, MQTT or GPIO). Secrets are masked on read
+  and only re-sent when you explicitly rotate them.
 
 Minimum production configuration:
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { CompoundPolicyPanel } from "@/components/CompoundPolicyPanel";
 import { Icon } from "@/components/Icon";
 import { PageHeader } from "@/components/PageHeader";
 import {
@@ -61,7 +62,7 @@ import type {
 import { GATE_STATUS_META } from "@/utils/constants";
 import { formatDateTime, initials } from "@/utils/format";
 
-type TabKey = "gates" | "cameras" | "users" | "account";
+type TabKey = "gates" | "cameras" | "policy" | "users" | "account";
 
 const EMPTY_GATE: GatePayload = {
   compound_id: "",
@@ -411,6 +412,7 @@ export function SettingsPage(): JSX.Element {
   const tabs: { key: TabKey; label: string }[] = [
     ...(isManager ? [{ key: "gates" as TabKey, label: t("settings.tab.gates") }] : []),
     ...(isManager ? [{ key: "cameras" as TabKey, label: t("settings.tab.cameras") }] : []),
+    ...(isAdmin ? [{ key: "policy" as TabKey, label: t("settings.tab.policy") }] : []),
     ...(isAdmin ? [{ key: "users" as TabKey, label: t("settings.tab.users") }] : []),
     { key: "account", label: t("settings.tab.account") },
   ];
@@ -641,6 +643,20 @@ export function SettingsPage(): JSX.Element {
         </>
       ) : null}
 
+      {tab === "policy" && isAdmin ? (
+        compound ? (
+          <CompoundPolicyPanel compoundId={compound.id} />
+        ) : (
+          <Card>
+            <EmptyState
+              icon="gate"
+              title={t("settings.policy.no_compound_title")}
+              description={t("settings.policy.no_compound_desc")}
+            />
+          </Card>
+        )
+      ) : null}
+
       {tab === "users" && isAdmin ? (
         <Card>
           <CardHeader title={t("settings.users.title")} subtitle={t("settings.users.subtitle")} icon="users" />
@@ -821,7 +837,12 @@ export function SettingsPage(): JSX.Element {
         footer={
           <>
             <Button variant="outline" onClick={() => setGateOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={() => gateMutation.mutate()} loading={gateMutation.isPending} disabled={!gateForm.name.trim() || !gateForm.code.trim()}>
+            <Button
+              onClick={() => gateMutation.mutate()}
+              loading={gateMutation.isPending}
+              // Gates belong to a compound: block the submit until it is loaded.
+              disabled={!compound || !gateForm.name.trim() || !gateForm.code.trim()}
+            >
               {editingGate ? t("common.save_changes") : t("settings.gate.create")}
             </Button>
           </>

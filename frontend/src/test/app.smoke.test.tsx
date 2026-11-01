@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
@@ -96,6 +96,117 @@ describe("GateVision dashboard", () => {
     expect(await screen.findByText("Yasmine Saad", {}, { timeout: 20_000 })).toBeTruthy();
     expect(screen.getByText("Ahmed Hassan")).toBeTruthy();
     expect(screen.getByRole("tab", { name: /vehicles/i })).toBeTruthy();
+  });
+
+  it("creates, edits and deletes a unit from the registry", async () => {
+    await signIn("admin");
+    renderAt("/registry");
+
+    expect(
+      await screen.findByRole("heading", { name: /residents & vehicles/i }, { timeout: 20_000 }),
+    ).toBeTruthy();
+
+    // Tabs render once the compound is loaded.
+    (await screen.findByRole("tab", { name: /units/i }, { timeout: 20_000 })).click();
+    // Seeded units prove the tab reads from the API, not a hardcoded list.
+    expect(await screen.findByText("A-101", {}, { timeout: 20_000 })).toBeTruthy();
+
+    // A per-run label keeps repeat runs against the shared demo database green.
+    const suffix = String(Date.now()).slice(-6);
+    const building = `Z9`;
+    const unitNumber = suffix;
+    const label = `${building}-${unitNumber}`;
+
+    screen.getByRole("button", { name: /add unit/i }).click();
+    fireEvent.change(await screen.findByLabelText(/^building/i), { target: { value: building } });
+    fireEvent.change(screen.getByLabelText(/^unit number/i), { target: { value: unitNumber } });
+    fireEvent.change(screen.getByLabelText(/^bedrooms/i), { target: { value: "2" } });
+    screen.getByRole("button", { name: /create unit/i }).click();
+
+    const created = await screen.findByText(label, {}, { timeout: 20_000 });
+    const row = created.closest("tr");
+    expect(row).toBeTruthy();
+
+    // The mutation stays pending until its invalidation refetch settles, so wait
+    // for the save button to become interactive before typing.
+    within(row as HTMLElement).getByLabelText(/edit unit/i).click();
+    const saveButton = (await screen.findByRole("button", {
+      name: /save changes/i,
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(saveButton.disabled).toBe(false), { timeout: 20_000 });
+
+    fireEvent.change(screen.getByLabelText(/^bedrooms/i), { target: { value: "4" } });
+    saveButton.click();
+
+    // Re-query the row: the table re-renders after the invalidation refetch.
+    await waitFor(
+      () => {
+        const refreshed = screen.getByText(label).closest("tr") as HTMLElement;
+        expect(within(refreshed).getByText("4")).toBeTruthy();
+      },
+      { timeout: 20_000 },
+    );
+
+    const refreshedRow = screen.getByText(label).closest("tr") as HTMLElement;
+    within(refreshedRow).getByLabelText(/delete unit/i).click();
+    const dialog = await screen.findByRole("dialog");
+    within(dialog).getByRole("button", { name: /^delete unit$/i }).click();
+    await waitFor(() => expect(screen.queryByText(label)).toBeNull(), { timeout: 20_000 });
+  });
+
+  it("refuses to delete a unit that still has residents", async () => {
+    await signIn("admin");
+    renderAt("/registry");
+
+    (await screen.findByRole("tab", { name: /units/i }, { timeout: 20_000 })).click();
+    const label = await screen.findByText("A-101", {}, { timeout: 20_000 });
+    const row = label.closest("tr") as HTMLElement;
+
+    within(row).getByLabelText(/delete unit/i).click();
+    const dialog = await screen.findByRole("dialog");
+    within(dialog).getByRole("button", { name: /^delete unit$/i }).click();
+
+    // Only the RESTRICT error copy mentions re-assigning the residents.
+    expect(
+      await screen.findByText(/move or remove them before deleting/i, {}, { timeout: 20_000 }),
+    ).toBeTruthy();
+    expect(screen.getByText("A-101")).toBeTruthy();
+  });
+
+  it("edits the compound barrier driver and thresholds", async () => {
+    await signIn("admin");
+    renderAt("/settings");
+
+    expect(
+      await screen.findByRole("heading", { name: /^settings$/i }, { timeout: 20_000 }),
+    ).toBeTruthy();
+    screen.getByRole("tab", { name: /policy & barrier/i }).click();
+
+    expect(await screen.findByText(/compound policy/i, {}, { timeout: 20_000 })).toBeTruthy();
+    const driver = (await screen.findByLabelText(/^driver/i)) as HTMLSelectElement;
+    // Toggle to a different transport so the form is dirty on every run.
+    const original = driver.value;
+    const next = original === "webhook" ? "simulator" : "webhook";
+    fireEvent.change(driver, { target: { value: next } });
+
+    if (next === "webhook") {
+      fireEvent.change(await screen.findByLabelText(/controller url/i), {
+        target: { value: "https://barrier.test/open" },
+      });
+    }
+    screen.getByRole("button", { name: /save policy/i }).click();
+    await waitFor(
+      () => expect(screen.getByText(/policy saved/i)).toBeTruthy(),
+      { timeout: 20_000 },
+    );
+
+    // Restore the previous driver so the shared demo database stays predictable.
+    fireEvent.change(screen.getByLabelText(/^driver/i), { target: { value: original } });
+    screen.getByRole("button", { name: /save policy/i }).click();
+    await waitFor(
+      () => expect((screen.getByLabelText(/^driver/i) as HTMLSelectElement).value).toBe(original),
+      { timeout: 20_000 },
+    );
   });
 
   it("shows visitors and temporary permits", async () => {
