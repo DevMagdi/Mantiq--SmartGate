@@ -4,6 +4,8 @@ import type {
   Camera,
   CameraSourceType,
   Compound,
+  CompoundSettings,
+  CompoundSettingsPatch,
   Gate,
   GateDirection,
   GateStatus,
@@ -68,6 +70,22 @@ export async function updateCompound(
   payload: Partial<Compound>,
 ): Promise<Compound> {
   const { data } = await api.patch<Compound>(`/compounds/${id}`, payload);
+  return data;
+}
+
+export async function getCompoundSettings(compoundId: string): Promise<CompoundSettings> {
+  const { data } = await api.get<CompoundSettings>(`/compounds/${compoundId}/settings`);
+  return data;
+}
+
+export async function updateCompoundSettings(
+  compoundId: string,
+  patch: CompoundSettingsPatch,
+): Promise<CompoundSettings> {
+  const { data } = await api.patch<CompoundSettings>(
+    `/compounds/${compoundId}/settings`,
+    patch,
+  );
   return data;
 }
 
