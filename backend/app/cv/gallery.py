@@ -86,7 +86,8 @@ class FaceGallery:
             label=entry.label,
         )
 
-    def similarity(self, left: Sequence[float], right: Sequence[float]) -> float:
+    @staticmethod
+    def similarity(left: Sequence[float], right: Sequence[float]) -> float:
         """Cosine similarity between two vectors (helper for enrollment checks)."""
         a = np.asarray(left, dtype=np.float32)
         b = np.asarray(right, dtype=np.float32)

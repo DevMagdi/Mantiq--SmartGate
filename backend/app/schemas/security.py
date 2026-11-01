@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Self
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -115,3 +115,36 @@ class FaceGalleryInfo(BaseModel):
     enrolled_residents: int
     model_name: str
     threshold: float
+
+
+class FaceQualityIssue(BaseModel):
+    """One enrollment check result."""
+
+    code: str
+    message: str
+    severity: str
+    hint: str | None = None
+
+
+class FaceQualityResponse(BaseModel):
+    """Enrollment pre-flight report returned to the dashboard."""
+
+    passed: bool
+    score: float
+    face_count: int
+    width: int
+    height: int
+    face_ratio: float
+    blur: float
+    brightness: float
+    duplicate_similarity: float | None = None
+    issues: list[FaceQualityIssue] = Field(default_factory=list)
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+
+
+class FacePruneRequest(BaseModel):
+    """Request to deactivate surplus embeddings in a compound gallery."""
+
+    compound_id: uuid.UUID
+    max_per_resident: int | None = Field(default=None, ge=1, le=10)
+    dry_run: bool = False

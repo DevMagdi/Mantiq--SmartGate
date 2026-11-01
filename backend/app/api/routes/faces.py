@@ -15,7 +15,14 @@ from app.api.deps import (
 )
 from app.core.exceptions import PermissionDeniedError
 from app.schemas.common import Message, Page
-from app.schemas.security import FaceEmbeddingRead, FaceGalleryInfo
+from app.schemas.security import (
+    FaceEmbeddingRead,
+    FaceGalleryInfo,
+    FacePruneRequest,
+    FaceQualityResponse,
+)
+from app.services.compound_policy import CompoundPolicy
+from app.services.compound_service import compound_service
 from app.services.face_service import face_service
 from app.services.permissions import enforce_compound, is_manager
 from app.services.resident_service import resident_service
@@ -57,6 +64,77 @@ async def list_faces(
     )
 
 
+@router.post(
+    "/quality-check",
+    response_model=FaceQualityResponse,
+    summary="Pre-flight an enrollment photo",
+)
+async def quality_check(
+    session: SessionDep,
+    user: CurrentUser,
+    file: UploadFile = File(..., description="Candidate enrollment photo"),
+    resident_id: uuid.UUID | None = Form(default=None),
+) -> FaceQualityResponse:
+    """Validate a photo before enrolling it.
+
+    Returns the quality score, every failed check and the compound thresholds so
+    the dashboard can explain what to fix. Nothing is persisted.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise PermissionDeniedError("Only image uploads are supported")
+    data = await file.read()
+    compound_id = user.compound_id
+    if resident_id is not None:
+        resident = await resident_service.get(session, resident_id)
+        if is_manager(user):
+            enforce_compound(user, resident.compound_id)
+        else:
+            profile = await resident_service.get_by_user(session, user.id)
+            if profile is None or profile.id != resident_id:
+                raise PermissionDeniedError("You can only check your own photos")
+        compound_id = resident.compound_id
+    policy = CompoundPolicy()
+    if compound_id is not None:
+        compound = await compound_service.get(session, compound_id)
+        policy = CompoundPolicy.from_settings(compound.settings)
+    report = await face_service.quality_report(
+        data,
+        policy=policy.vision,
+        resident_id=resident_id,
+        session=session,
+    )
+    return FaceQualityResponse(
+        **report.as_dict(),
+        thresholds=policy.vision.to_dict(),
+    )
+
+
+@router.post("/prune", response_model=Message, summary="Prune surplus embeddings")
+async def prune_gallery(
+    payload: FacePruneRequest,
+    session: SessionDep,
+    manager: ManagerUser,
+) -> Message:
+    """Deactivate surplus embeddings, keeping the best quality per resident."""
+    compound = await compound_service.get(session, payload.compound_id)
+    enforce_compound(manager, compound.id)
+    policy = CompoundPolicy.from_settings(compound.settings)
+    limit = payload.max_per_resident or policy.vision.max_embeddings_per_resident
+    result = await face_service.prune(
+        session,
+        compound_id=compound.id,
+        max_per_resident=limit,
+        dry_run=payload.dry_run,
+    )
+    verb = "would deactivate" if payload.dry_run else "deactivated"
+    return Message(
+        message=(
+            f"Evaluated {result['evaluated']} embeddings: {verb} {result['deactivated']} "
+            f"and kept {result['kept']} (limit {limit} per resident)."
+        )
+    )
+
+
 @router.get("/gallery", response_model=FaceGalleryInfo, summary="Face gallery statistics")
 async def gallery_info(
     session: SessionDep, manager: ManagerUser, compound_id: CompoundScope
@@ -87,6 +165,8 @@ async def enroll_face(
     if not file.content_type or not file.content_type.startswith("image/"):
         raise PermissionDeniedError("Only image uploads are supported")
     data = await file.read()
+    compound = await compound_service.get(session, resident.compound_id)
+    policy = CompoundPolicy.from_settings(compound.settings)
     embedding, similarity = await face_service.enroll(
         session,
         compound_id=resident.compound_id,
@@ -94,6 +174,7 @@ async def enroll_face(
         image_data=data,
         actor_id=user.id,
         overwrite=overwrite,
+        policy=policy.vision,
     )
     result = FaceEmbeddingRead.model_validate(embedding)
     result.similarity_to_existing = similarity
