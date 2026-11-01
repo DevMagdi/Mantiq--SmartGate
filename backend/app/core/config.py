@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     CV_MODE: CvMode = "mock"
     CV_PLATE_DETECTOR: str = "yolo"  # yolo | mock
     CV_PLATE_MODEL_PATH: str = "models/plate_yolov8.pt"
+    CV_YOLO_IMAGE_SIZE: int = 640
+    CV_YOLO_IOU: float = 0.45
+    CV_YOLO_DEVICE: str = ""  # "" = auto (CUDA when present), "cpu", "0", "cuda:1"
+    CV_YOLO_HALF: bool = False
+    CV_OCR_ALLOWLIST: bool = True
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
     CV_OCR_LANGUAGES: list[str] = Field(default_factory=lambda: ["en"])
     CV_FACE_ENGINE: str = "insightface"  # insightface | mock

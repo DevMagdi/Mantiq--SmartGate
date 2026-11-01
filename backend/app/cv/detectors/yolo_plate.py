@@ -27,17 +27,25 @@ class YOLOPlateDetector:
         self,
         model_path: str | None = None,
         confidence: float | None = None,
-        iou: float = 0.45,
-        image_size: int = 640,
+        iou: float | None = None,
+        image_size: int | None = None,
         max_detections: int = 5,
+        device: str | None = None,
+        half: bool | None = None,
     ) -> None:
         self.model_path = Path(model_path or settings.CV_PLATE_MODEL_PATH)
-        self.confidence = settings.CV_PLATE_CONFIDENCE_THRESHOLD if confidence is None else confidence
-        self.iou = iou
-        self.image_size = image_size
+        self.confidence = (
+            settings.CV_PLATE_CONFIDENCE_THRESHOLD if confidence is None else confidence
+        )
+        self.iou = settings.CV_YOLO_IOU if iou is None else iou
+        self.image_size = settings.CV_YOLO_IMAGE_SIZE if image_size is None else image_size
         self.max_detections = max_detections
+        # ``None`` lets Ultralytics pick the device (CUDA when available).
+        self.device = device or (settings.CV_YOLO_DEVICE or None)
+        self.half = settings.CV_YOLO_HALF if half is None else half
         self._model: Any | None = None
         self._load_error: str | None = None
+        self._class_names: list[str] = []
 
     @property
     def load_error(self) -> str | None:
@@ -60,6 +68,13 @@ class YOLOPlateDetector:
             from ultralytics import YOLO
 
             self._model = YOLO(str(self.model_path))
+            names = getattr(self._model, "names", {}) or {}
+            if isinstance(names, dict):
+                self._class_names = [str(value) for value in names.values()]
+            logger.info(
+                "Plate model classes: %s",
+                ", ".join(self._class_names) if self._class_names else "unnamed",
+            )
         except ImportError as exc:  # pragma: no cover - dependency guard
             raise VisionEngineError(
                 "ultralytics is not installed. Install the CV extras: "
@@ -81,6 +96,8 @@ class YOLOPlateDetector:
                 imgsz=self.image_size,
                 max_det=self.max_detections,
                 verbose=False,
+                device=self.device,
+                half=self.half,
             )
         except Exception as exc:  # pragma: no cover - inference failure
             logger.error("YOLO inference failed: %s", exc)
@@ -100,7 +117,16 @@ class YOLOPlateDetector:
                 ).clamp(image)
                 if bbox.width < 20 or bbox.height < 8:
                     continue
-                detections.append(PlateDetection(bbox=bbox, confidence=score))
+                label: str | None = None
+                cls_id = getattr(box, "cls", None)
+                if cls_id is not None and self._class_names:
+                    try:
+                        label = self._class_names[int(cls_id[0])]
+                    except (IndexError, TypeError, ValueError):
+                        label = None
+                detections.append(
+                    PlateDetection(bbox=bbox, confidence=score, label=label)
+                )
         detections.sort(key=lambda item: item.confidence, reverse=True)
         return detections
 
