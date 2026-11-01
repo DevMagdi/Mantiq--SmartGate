@@ -1,6 +1,11 @@
 import { api } from "@/services/api";
 import type { MessageResponse } from "@/types/api";
-import type { VisionAnalyzeResult, VisionPipelineStatus } from "@/types/models";
+import type {
+  ActuatorStatusResponse,
+  ActuatorTestResult,
+  VisionAnalyzeResult,
+  VisionPipelineStatus,
+} from "@/types/models";
 
 export async function fetchCvStatus(): Promise<VisionPipelineStatus> {
   const { data } = await api.get<VisionPipelineStatus>("/cv/status");
@@ -39,6 +44,24 @@ export async function fetchCameraHealth(): Promise<Record<string, number>> {
 
 export async function fetchWorkers(): Promise<Record<string, unknown>> {
   const { data } = await api.get<Record<string, unknown>>("/cv/workers");
+  return data;
+}
+
+export async function fetchActuatorStatus(compoundId?: string): Promise<ActuatorStatusResponse> {
+  const { data } = await api.get<ActuatorStatusResponse>("/cv/actuators", {
+    params: compoundId ? { compound_id: compoundId } : undefined,
+  });
+  return data;
+}
+
+export async function testActuator(
+  gateId: string,
+  action: "open" | "close" | "hold" = "open",
+): Promise<ActuatorTestResult> {
+  const { data } = await api.post<ActuatorTestResult>("/cv/actuators/test", {
+    gate_id: gateId,
+    action,
+  });
   return data;
 }
 

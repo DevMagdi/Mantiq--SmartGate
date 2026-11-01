@@ -585,7 +585,7 @@ export function RegistryPage(): JSX.Element {
                         </Td>
                         <Td className="text-xs">
                           {[vehicle.make, vehicle.model].filter(Boolean).join(" ") || "—"}
-                          <span className="ml-1 text-[10px] text-ink-400">{vehicle.color ?? ""}</span>
+                          <span className="ms-1 text-[10px] text-ink-400">{vehicle.color ?? ""}</span>
                         </Td>
                         <Td className="text-xs">{vehicle.resident?.full_name ?? "Visitor / unassigned"}</Td>
                         <Td>

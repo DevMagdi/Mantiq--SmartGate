@@ -384,7 +384,7 @@ export function SecurityPage(): JSX.Element {
                             <Icon name="users" className="h-6 w-6" />
                           </span>
                         )}
-                        <div className="absolute left-2 top-2">
+                        <div className="absolute start-2 top-2">
                           <Badge tone={face.is_active ? "success" : "neutral"} dot>{face.is_active ? "Active" : "Inactive"}</Badge>
                         </div>
                       </div>
