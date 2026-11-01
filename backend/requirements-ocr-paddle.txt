@@ -1,0 +1,6 @@
+# Optional PaddleOCR backend (set CV_OCR_ENGINE=paddleocr).
+# PaddleOCR is heavier and can conflict with EasyOCR's dependency pins, so it is
+# deliberately isolated in its own requirements file.
+
+paddleocr==3.7.0
+paddlepaddle==3.0.0

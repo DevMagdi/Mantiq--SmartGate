@@ -1,0 +1,160 @@
+# ============================================================================
+# GateVision — full stack
+#
+#   cp .env.example .env        # optional, every value has a working default
+#   docker compose up --build
+#
+#   dashboard  -> http://localhost:8080
+#   API docs   -> http://localhost:8000/docs
+# ============================================================================
+
+name: gatevision
+
+x-api-environment: &api-environment
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DEBUG: ${DEBUG:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-text}
+  DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Africa/Cairo}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me-before-production}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+  REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gatevision}:${POSTGRES_PASSWORD:-gatevision}@postgres:5432/${POSTGRES_DB:-gatevision}
+  AUTO_CREATE_TABLES: "false"
+  DATABASE_ECHO: ${DATABASE_ECHO:-false}
+  REDIS_ENABLED: "true"
+  REDIS_URL: redis://redis:6379/0
+  REDIS_EVENT_CHANNEL: ${REDIS_EVENT_CHANNEL:-gatevision:events}
+  CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
+  TRUSTED_HOSTS: ${TRUSTED_HOSTS:-["*"]}
+  MEDIA_ROOT: /data/media
+  MEDIA_URL: /media
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+  SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@gatevision.app}
+  SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin@12345}
+  SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-GateVision Administrator}
+  CV_ENABLED: ${CV_ENABLED:-true}
+  CV_RUNNER_ENABLED: "false"
+  CV_MODE: ${CV_MODE:-mock}
+  CV_PLATE_DETECTOR: ${CV_PLATE_DETECTOR:-yolo}
+  CV_PLATE_MODEL_PATH: /app/models/plate_yolov8.pt
+  CV_OCR_ENGINE: ${CV_OCR_ENGINE:-easyocr}
+  CV_OCR_LANGUAGES: ${CV_OCR_LANGUAGES:-["en"]}
+  CV_FACE_ENGINE: ${CV_FACE_ENGINE:-insightface}
+  CV_FACE_MODEL_NAME: ${CV_FACE_MODEL_NAME:-buffalo_l}
+  CV_FACE_SIMILARITY_THRESHOLD: ${CV_FACE_SIMILARITY_THRESHOLD:-0.45}
+  CV_DEMO_CAMERAS: ${CV_DEMO_CAMERAS:-true}
+  CV_DEMO_INTERVAL_SECONDS: ${CV_DEMO_INTERVAL_SECONDS:-9}
+  EXPORT_ROW_LIMIT: ${EXPORT_ROW_LIMIT:-50000}
+  RETENTION_DAYS: ${RETENTION_DAYS:-365}
+  MAINTENANCE_ENABLED: ${MAINTENANCE_ENABLED:-true}
+  MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-900}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gatevision}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gatevision}
+      POSTGRES_DB: ${POSTGRES_DB:-gatevision}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gatevision} -d ${POSTGRES_DB:-gatevision}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+      args:
+        INSTALL_CV: "false"
+    image: gatevision-api:latest
+    restart: unless-stopped
+    environment: *api-environment
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+    volumes:
+      - media_data:/data/media
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  cv-worker:
+    build:
+      context: ./backend
+      args:
+        INSTALL_CV: "true"
+    image: gatevision-cv:latest
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      CV_RUNNER_ENABLED: "true"
+      CV_PLATE_DETECTOR: ${CV_PLATE_DETECTOR:-yolo}
+      CV_OCR_ENGINE: ${CV_OCR_ENGINE:-easyocr}
+      CV_FACE_ENGINE: ${CV_FACE_ENGINE:-insightface}
+    command: ["python", "-m", "app.cv.runner"]
+    volumes:
+      - media_data:/data/media
+      - ${CV_MODELS_DIR:-./backend/models}:/app/models:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_MEDIA_BASE_URL: ${VITE_MEDIA_BASE_URL:-}
+    image: gatevision-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:

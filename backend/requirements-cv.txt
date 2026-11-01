@@ -1,0 +1,19 @@
+# GateVision computer-vision stack.
+#
+# Required for CV_MODE=real:
+#   * YOLOv8/v10 plate detection      -> ultralytics
+#   * EasyOCR plate reading           -> easyocr (default)
+#   * InsightFace face recognition     -> insightface + onnxruntime
+#
+# PaddleOCR is supported as a swappable OCR engine; install requirements-ocr-paddle.txt
+# when CV_OCR_ENGINE=paddleocr.
+#
+# Note: `torch` is intentionally unpinned so the correct CPU/CUDA wheel for the
+# host can be selected. The Docker image pre-installs the CPU wheels.
+
+ultralytics==8.4.195
+easyocr==1.7.2
+insightface==2.1
+onnxruntime==1.31.1
+scikit-image==0.25.2
+scikit-learn==1.6.1
