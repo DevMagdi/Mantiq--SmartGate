@@ -25,6 +25,7 @@ import {
   fetchActuatorStatus,
   fetchCameraHealth,
   fetchCvStatus,
+  fetchRealModeStatus,
   testActuator,
 } from "@/services/cv";
 import { gateCommand, listGates } from "@/services/admin";
@@ -41,7 +42,7 @@ import type {
   VisionAnalyzeResult,
 } from "@/types/models";
 import { DECISION_META, reasonLabel } from "@/utils/constants";
-import { formatPercent, formatTime, relativeTime } from "@/utils/format";
+import { formatDateTime, formatPercent, formatTime, relativeTime } from "@/utils/format";
 
 const STATUS_TONE: Record<ConnectionStatus, "success" | "warning" | "danger" | "neutral"> = {
   open: "success",
@@ -92,6 +93,12 @@ export function LiveMonitorPage(): JSX.Element {
     queryKey: ["camera-health"],
     queryFn: fetchCameraHealth,
     refetchInterval: 30_000,
+  });
+  const realMode = useQuery({
+    queryKey: ["cv-real-mode"],
+    queryFn: fetchRealModeStatus,
+    refetchInterval: 60_000,
+    retry: false,
   });
   const actuators = useQuery({
     queryKey: ["cv-actuators"],
@@ -240,6 +247,18 @@ export function LiveMonitorPage(): JSX.Element {
         }
       />
 
+      {realMode.data && !realMode.data.real_detections_only ? (
+        <Card className="border-amber-200 bg-amber-50/70 p-3 dark:border-amber-500/30 dark:bg-amber-500/5">
+          <div className="flex items-start gap-2 text-xs text-amber-800 dark:text-amber-200">
+            <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">{t("live.mock_banner_title")}</p>
+              <p className="mt-0.5 leading-relaxed">{t("live.mock_banner_body")}</p>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label={t("live.cameras_online")}
@@ -274,6 +293,47 @@ export function LiveMonitorPage(): JSX.Element {
           }
         />
       </div>
+
+      {cameraHealth.data && cameraHealth.data.cameras.length > 0 ? (
+        <Card>
+          <CardHeader
+            title={t("live.camera_health_title")}
+            subtitle={t("live.camera_health_subtitle")}
+            icon="camera"
+          />
+          <div className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3">
+            {cameraHealth.data.cameras.map((camera) => {
+              const healthy = camera.status === "online" && !camera.stale && camera.is_active;
+              return (
+                <div
+                  key={camera.camera_id}
+                  className="flex items-start justify-between gap-3 rounded-xl border border-ink-200 p-3 dark:border-ink-800"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-ink-900 dark:text-ink-100">
+                      {camera.name}
+                    </p>
+                    <p className="truncate text-[10px] text-ink-400">
+                      {camera.gate_code} · {camera.source_type}
+                      {camera.resolution ? ` · ${camera.resolution}` : ""}
+                    </p>
+                    {camera.last_error ? (
+                      <p className="mt-1 line-clamp-2 text-[10px] text-rose-500">{camera.last_error}</p>
+                    ) : camera.last_frame_at ? (
+                      <p className="mt-1 text-[10px] text-ink-400">
+                        {t("live.camera_last_frame", { time: formatDateTime(camera.last_frame_at) })}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Badge tone={healthy ? "success" : camera.stale ? "warning" : "danger"} dot>
+                    {camera.stale ? t("live.camera_stale") : t(`status.${camera.status}`, {})}
+                  </Badge>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">

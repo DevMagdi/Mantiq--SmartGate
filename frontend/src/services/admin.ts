@@ -48,6 +48,21 @@ export async function listCompounds(): Promise<Page<Compound>> {
   return data;
 }
 
+export interface CompoundCreatePayload {
+  name: string;
+  code: string;
+  city?: string | null;
+  address?: string | null;
+  contact_phone?: string | null;
+  contact_email?: string | null;
+  timezone?: string;
+}
+
+export async function createCompound(payload: CompoundCreatePayload): Promise<Compound> {
+  const { data } = await api.post<Compound>("/compounds", payload);
+  return data;
+}
+
 export async function updateCompound(
   id: string,
   payload: Partial<Compound>,

@@ -29,8 +29,12 @@ operations that work on a single box or in Docker Compose.
 - Multi-camera entry/exit lanes, bidirectional direction inference, RTSP / USB /
   video-file / demo sources, reconnect and per-camera health.
 - Barrier control: simulated relay, HTTP webhook, and a dashboard command endpoint.
-- `CV_MODE=mock` gives deterministic scripted detections, so the whole product runs
-  and is testable without GPUs or model weights.
+- **Real mode is the default** (`CV_MODE=real`): detections only ever come from
+  camera frames. `CV_MODE=mock` is opt-in for offline development/tests and for
+  the scripted demo — the system never invents a detection in real mode.
+- Production-ready barrier drivers: signed HTTP webhook (recommended), MQTT, GPIO
+  and a simulator for testing; every command is journaled with latency and result.
+- Go-live runbook: [docs/real-deployment.md](docs/real-deployment.md).
 
 **Operations**
 
@@ -172,11 +176,25 @@ docker compose up --build
 | API + Swagger | <http://localhost:8000/docs> |
 | Health | <http://localhost:8000/api/v1/health> |
 
-The API applies migrations (`alembic upgrade head`), seeds the demo compound and
-starts two simulated camera workers. The `cv-worker` container starts with
-`CV_MODE=mock`; set `CV_MODE=real` and mount your model at
-`./backend/models/plate_yolov8.pt` to use YOLO + EasyOCR + InsightFace (the worker
-image installs the full CV stack, `INSTALL_CV=true`).
+The API applies migrations (`alembic upgrade head`) and starts with **production
+defaults**: `CV_MODE=real`, `SEED_DEMO_DATA=false` (only the bootstrap admin
+account), no demo cameras. Add your cameras in **Settings → Cameras** (or via
+`CAMERAS_JSON`) and put the plate model in `./backend/models/` — the worker image
+installs the full CV stack (`INSTALL_CV=true`).
+
+On a fresh database the API creates one bootstrap admin
+(`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, default `admin@gatevision.app` /
+`Admin@12345`) so you can log in, create the compound, its gates and cameras —
+then change the password. Nothing else is seeded.
+
+For the offline demo instead:
+
+```bash
+CV_MODE=mock SEED_DEMO_DATA=true docker compose up --build -d
+```
+
+That seeds the demo compound and two synthetic camera feeds; the dashboard shows a
+yellow "mock mode" banner so nobody mistakes it for a live site.
 
 **Demo accounts**
 
@@ -263,8 +281,11 @@ The most important variables:
 | `SECRET_KEY` | dev placeholder | JWT signing — **must** change |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 60 | Access token TTL |
 | `AUTO_CREATE_TABLES` | `false` | Development convenience only |
-| `SEED_DEMO_DATA` | `false` (Compose: `true`) | Demo compound + accounts |
-| `CV_MODE` | `mock` | `mock` or `real` |
+| `SEED_DEMO_DATA` | `false` | Demo compound + accounts (opt in) |
+| `CV_MODE` | `real` | `real` (production) or `mock` (dev/demo only) |
+| `CV_ALLOW_DEMO_SOURCES` | `false` | permit synthetic feeds in real mode |
+| `CV_RTSP_TRANSPORT` | `tcp` | `tcp` \| `udp` \| `auto` |
+| `CAMERAS_JSON` | empty | bootstrap cameras from the environment |
 | `CV_RUNNER_ENABLED` | `true` | In-process camera workers |
 | `CV_PLATE_MODEL_PATH` | `models/plate_yolov8.pt` | YOLO weights |
 | `CV_YOLO_IMAGE_SIZE` / `CV_YOLO_IOU` | 640 / 0.45 | Detector input + NMS |
@@ -447,3 +468,4 @@ curl -s https://gates.example.com/metrics | grep gatevision_cv_engine_ready
 | [docs/face-enrollment.md](docs/face-enrollment.md) | Enrollment quality gates, gallery pruning, vehicle registration |
 | [docs/hardware.md](docs/hardware.md) | Barrier drivers: webhook HMAC, MQTT, GPIO wiring and troubleshooting |
 | [docs/deployment.md](docs/deployment.md) | Production checklist: secrets, probes, metrics, alerts, rollback |
+| [docs/real-deployment.md](docs/real-deployment.md) | **Go-live runbook**: real cameras, models, barrier webhook, hardware, troubleshooting |

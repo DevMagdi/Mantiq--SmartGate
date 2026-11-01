@@ -161,6 +161,20 @@ describe("GateVision dashboard", () => {
     expect(screen.getByRole("tab", { name: /users/i })).toBeTruthy();
   });
 
+  it("shows the camera fleet with a stream test and the vision status panel", async () => {
+    await signIn("admin");
+    renderAt("/settings");
+
+    await screen.findByRole("heading", { name: /^settings$/i }, { timeout: 20_000 });
+    // Cameras tab: vision/real-mode panel, camera rows and the per-stream test button.
+    const camerasTab = await screen.findByRole("tab", { name: /cameras/i });
+    camerasTab.click();
+
+    expect(await screen.findByText("Entry Lane Camera", {}, { timeout: 20_000 })).toBeTruthy();
+    expect(screen.getByText(/vision & barrier configuration/i)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /^test$/i }).length).toBeGreaterThan(0);
+  });
+
   it("hides the staff directory from security officers", async () => {
     await signIn("security_officer");
     renderAt("/settings");

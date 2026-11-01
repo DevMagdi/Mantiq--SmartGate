@@ -14,8 +14,7 @@ from app.core.logging import get_logger
 from app.core.metrics import set_engine_state
 from app.cv.engine import get_vision_engine
 from app.cv.gate_controller import GateController, get_gate_controller
-from app.models.compound import Camera, Compound, Gate
-from app.models.enums import CameraStatus
+from app.models.compound import Compound, Gate
 from app.models.security import FaceEmbedding
 from app.schemas.access import (
     ActuatorCommandRead,
@@ -26,6 +25,8 @@ from app.schemas.access import (
 )
 from app.services.compound_policy import CompoundPolicy
 from app.schemas.security import FaceGalleryInfo
+from app.schemas.camera import CameraHealthResponse, RealModeStatus
+from app.services.camera_service import camera_service
 
 logger = get_logger(__name__)
 
@@ -134,17 +135,42 @@ class CvService:
             compounds=entries, journal=self.controller.journal.summary()
         )
 
-    async def camera_health(self, session: AsyncSession, compound_id: uuid.UUID | None) -> dict[str, int]:
-        stmt = select(Camera.status, func.count(Camera.id))
+    async def camera_health(
+        self, session: AsyncSession, compound_id: uuid.UUID | None
+    ) -> CameraHealthResponse:
+        """Per-camera health for the Live Monitor and the camera admin panel."""
+        payload = await camera_service.health(session, compound_id)
+        return CameraHealthResponse.model_validate(payload)
+
+    async def real_mode_status(
+        self, session: AsyncSession, compound_id: uuid.UUID | None
+    ) -> RealModeStatus:
+        """Prove (or disprove) that detections come from real cameras."""
+        engine_status = self.engine.status()
+        health = await self.camera_health(session, compound_id)
+        barrier_driver = settings.BARRIER_DRIVER
         if compound_id is not None:
-            stmt = stmt.join(Gate, Camera.gate_id == Gate.id).where(Gate.compound_id == compound_id)
-        stmt = stmt.group_by(Camera.status)
-        rows = (await session.execute(stmt)).all()
-        counts = {status.value: 0 for status in CameraStatus}
-        for status, count in rows:
-            counts[status.value] = int(count)
-        counts["total"] = sum(counts.values())
-        return counts
+            compound = await session.get(Compound, compound_id)
+            if compound is not None:
+                barrier_driver = CompoundPolicy.from_settings(compound.settings).barrier.driver
+        warnings = list(engine_status["warnings"]) + settings.cv_warnings()  # type: ignore[arg-type]
+        mode = str(engine_status["mode"])
+        return RealModeStatus(
+            mode=mode,
+            real_detections_only=mode == "real" and health.demo == 0,
+            engine_ready=bool(engine_status["engine_ready"]),
+            warnings=sorted(dict.fromkeys(warnings)),
+            cameras_total=health.total,
+            cameras_online=health.online + health.stale,
+            demo_cameras=health.demo,
+            barrier_driver=str(barrier_driver),
+            models={
+                "plate_detector": str(engine_status["plate_detector"]),
+                "ocr": str(engine_status["ocr_engine"]),
+                "face": str(engine_status["face_engine"]),
+                "model_path": str(settings.CV_PLATE_MODEL_PATH),
+            },
+        )
 
     async def refresh_gallery(self) -> None:
         """Notify other processes that the face gallery must be reloaded."""

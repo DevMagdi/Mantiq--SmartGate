@@ -1,8 +1,23 @@
-"""Frame sources: RTSP/USB/file cameras and a synthetic demo renderer."""
+"""Frame sources: RTSP/USB/file cameras and a synthetic demo renderer.
+
+Real deployments spend most of their debugging time here, so this module is
+deliberately defensive:
+
+* RTSP is opened over TCP with explicit open/read timeouts (FFmpeg honours both
+  properties for the ``rtsp`` backend).
+* Reconnection uses exponential backoff and never busy-loops the CPU.
+* ``${ENV_VAR}`` placeholders inside a camera URL are expanded from the process
+  environment, so camera passwords live in the compose/secrets file instead of
+  the database.
+* Every source exposes :meth:`FrameSource.stats` (frames, reconnects, failures,
+  last frame time) which the API and the Live Monitor surface as camera health.
+"""
 
 from __future__ import annotations
 
 import math
+import os
+import re
 import time
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -19,6 +34,68 @@ from app.cv.types import BoundingBox, Image
 
 logger = get_logger(__name__)
 
+_ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
+_NETWORK_SCHEMES = ("rtsp://", "rtsps://", "http://", "https://")
+
+
+def expand_env_source(url: str) -> str:
+    """Expand ``${VAR}`` placeholders inside a camera URL.
+
+    Missing variables are left untouched so the failure is visible in the
+    camera health panel instead of silently producing an empty URL.
+    """
+    if not url or "${" not in url:
+        return url
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        value = os.environ.get(name)
+        return value if value is not None else match.group(0)
+
+    return _ENV_PATTERN.sub(_replace, url)
+
+
+def redact_source(url: str) -> str:
+    """Hide RTSP credentials before a URL is logged or returned by the API."""
+    if "@" not in url or "://" not in url:
+        return url
+    scheme, _, rest = url.partition("://")
+    credentials, at, host = rest.rpartition("@")
+    if not at:
+        return url
+    user = credentials.split(":", 1)[0]
+    return f"{scheme}://{user}:***@{host}"
+
+
+def is_network_source(url: str) -> bool:
+    return url.strip().lower().startswith(_NETWORK_SCHEMES)
+
+
+def normalise_capture_target(url: str) -> int | str:
+    """Translate a camera ``source_url`` into an OpenCV capture target.
+
+    Supported forms::
+
+        rtsp://user:pass@host:554/Streaming/Channels/101
+        http://host/video.mjpg
+        0                 (USB camera index)
+        usb://1           (explicit USB camera index)
+        file:///data/clip.mp4
+        ./clips/entry.mp4
+    """
+    value = expand_env_source(url).strip()
+    lowered = value.lower()
+    if lowered.startswith("usb://"):
+        index = value[6:]
+        if not index.isdigit():
+            raise VisionEngineError(f"Invalid USB camera index in '{redact_source(url)}'")
+        return int(index)
+    if lowered.startswith("file://"):
+        return value[7:]
+    if value.isdigit():
+        return int(value)
+    return value
+
 
 class FrameSource(ABC):
     """A pull-based camera stream."""
@@ -27,6 +104,11 @@ class FrameSource(ABC):
         self.source_url = source_url
         self.name = name
         self.last_meta: dict[str, Any] = {}
+        self.frames_read = 0
+        self.failures = 0
+        self.reconnects = 0
+        self.last_frame_at: datetime | None = None
+        self.connected_at: datetime | None = None
 
     @abstractmethod
     def open(self) -> None:
@@ -44,66 +126,138 @@ class FrameSource(ABC):
         """Return metadata attached to the most recent frame."""
         return self.last_meta
 
+    def stats(self) -> dict[str, Any]:
+        """Return counters used by the camera health endpoints."""
+        return {
+            "frames_read": self.frames_read,
+            "failures": self.failures,
+            "reconnects": self.reconnects,
+            "last_frame_at": self.last_frame_at.isoformat() if self.last_frame_at else None,
+            "connected_at": self.connected_at.isoformat() if self.connected_at else None,
+        }
+
 
 class OpenCVFrameSource(FrameSource):
-    """OpenCV backed source supporting RTSP, HTTP, USB indexes and video files."""
+    """OpenCV backed source supporting RTSP, HTTP, USB indexes and video files.
 
-    RECONNECT_DELAY_SECONDS = 2.0
+    ``read()`` never raises and never blocks indefinitely: it retries the
+    connection with exponential backoff and returns ``None`` while the camera is
+    unavailable, which lets the worker keep its slot and report health instead of
+    dying (and needing a supervisor restart).
+    """
 
-    def __init__(self, source_url: str, name: str, width: int | None = None) -> None:
+    def __init__(
+        self,
+        source_url: str,
+        name: str,
+        width: int | None = None,
+        *,
+        reconnect_delay: float | None = None,
+        max_delay: float | None = None,
+        transport: str | None = None,
+        open_timeout_ms: int | None = None,
+        read_timeout_ms: int | None = None,
+    ) -> None:
         super().__init__(source_url, name)
         self.width = width or settings.CV_FRAME_WIDTH
+        self.reconnect_delay = max(
+            0.1,
+            settings.CV_RECONNECT_DELAY_SECONDS if reconnect_delay is None else reconnect_delay,
+        )
+        self.max_delay = max(
+            self.reconnect_delay,
+            settings.CV_RECONNECT_MAX_DELAY_SECONDS if max_delay is None else max_delay,
+        )
+        self.transport = (transport or settings.CV_RTSP_TRANSPORT or "tcp").lower()
+        self.open_timeout_ms = (
+            settings.CV_RTSP_OPEN_TIMEOUT_MS if open_timeout_ms is None else open_timeout_ms
+        )
+        self.read_timeout_ms = (
+            settings.CV_RTSP_READ_TIMEOUT_MS if read_timeout_ms is None else read_timeout_ms
+        )
         self._capture: cv2.VideoCapture | None = None
         self._is_file = False
+        self._delay = self.reconnect_delay
+        self._open_failures = 0
+        self.last_error: str | None = None
 
-    def _target(self) -> int | str:
-        value = self.source_url.strip()
-        if value.isdigit():
-            return int(value)
-        return value
+    # ------------------------------------------------------------------ opening
+    def _apply_ffmpeg_options(self) -> None:
+        """Configure FFmpeg before ``cv2.VideoCapture`` opens an RTSP stream.
+
+        OpenCV reads ``OPENCV_FFMPEG_CAPTURE_OPTIONS`` when the capture is
+        created; TCP transport plus timeouts is the difference between a camera
+        that recovers from a cable pull and one that hangs the worker forever.
+        """
+        if not is_network_source(self.source_url):
+            return
+        options = ["rtsp_transport;tcp"] if self.transport == "tcp" else []
+        if self.transport == "udp":
+            options = ["rtsp_transport;udp"]
+        options.append(f"stimeout;{max(1000, self.read_timeout_ms) * 1000}")
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(options)
+
+    def target(self) -> int | str:
+        return normalise_capture_target(self.source_url)
 
     def open(self) -> None:
         if self._capture is not None:
             return
-        target = self._target()
-        self._is_file = isinstance(target, str) and not target.lower().startswith(
-            ("rtsp://", "http://", "https://")
-        )
+        target = self.target()
+        self._is_file = isinstance(target, str) and not is_network_source(target)
         if isinstance(target, str) and self._is_file:
             from pathlib import Path
 
             if not Path(target).exists():
                 raise VisionEngineError(f"Video file not found: {target}")
-        capture = cv2.VideoCapture(target)
-        if isinstance(target, str) and target.lower().startswith(("rtsp://", "http://", "https://")):
+        self._apply_ffmpeg_options()
+        params: list[int] = []
+        if is_network_source(self.source_url):
+            params = [
+                int(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC),
+                int(self.open_timeout_ms),
+                int(cv2.CAP_PROP_READ_TIMEOUT_MSEC),
+                int(self.read_timeout_ms),
+            ]
+        capture = (
+            cv2.VideoCapture(target, cv2.CAP_FFMPEG, params)
+            if params
+            else cv2.VideoCapture(target)
+        )
+        if isinstance(target, str) and is_network_source(target):
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not capture.isOpened():
             capture.release()
-            raise VisionEngineError(f"Unable to open camera stream: {self.source_url}")
+            self.last_error = f"Unable to open camera stream: {redact_source(self.source_url)}"
+            raise VisionEngineError(self.last_error)
         self._capture = capture
-        logger.info("Camera stream opened: %s (%s)", self.name, self.source_url)
+        self._delay = self.reconnect_delay
+        self._open_failures = 0
+        self.connected_at = datetime.now(UTC)
+        self.last_error = None
+        logger.info(
+            "Camera stream opened: %s (%s, transport=%s)",
+            self.name,
+            redact_source(self.source_url),
+            self.transport,
+        )
 
+    # ------------------------------------------------------------------ reading
     def read(self) -> Image | None:
         if self._capture is None:
             try:
                 self.open()
-            except VisionEngineError:
-                time.sleep(self.RECONNECT_DELAY_SECONDS)
-                return None
+            except VisionEngineError as exc:
+                return self._fail(str(exc))
         assert self._capture is not None
         ok, frame = self._capture.read()
         if not ok or frame is None:
             if self._is_file:
-                # Loop short demo clips so the gate never goes blind.
+                # Loop short clips so a file-backed demo never goes blind.
                 self._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ok, frame = self._capture.read()
-                if not ok or frame is None:
-                    return None
-            else:
-                logger.warning("Frame read failed for %s, reconnecting", self.name)
-                self.close()
-                time.sleep(self.RECONNECT_DELAY_SECONDS)
-                return None
+            if not ok or frame is None:
+                return self._fail("Frame read failed; reconnecting")
         if self.width and frame.shape[1] > self.width:
             ratio = self.width / frame.shape[1]
             frame = cv2.resize(
@@ -111,12 +265,43 @@ class OpenCVFrameSource(FrameSource):
                 (self.width, max(1, int(frame.shape[0] * ratio))),
                 interpolation=cv2.INTER_AREA,
             )
+        self.frames_read += 1
+        self.last_frame_at = datetime.now(UTC)
+        self.last_error = None
         return frame
+
+    def _fail(self, error: str) -> None:
+        """Release the stream, back off and report the failure."""
+        self.failures += 1
+        self.last_error = error
+        self.close()
+        delay = min(self._delay, self.max_delay)
+        logger.warning(
+            "Camera %s unavailable (%s); retrying in %.1fs", self.name, error, delay
+        )
+        time.sleep(delay)
+        self._delay = min(self._delay * 2, self.max_delay)
+        return None
 
     def close(self) -> None:
         if self._capture is not None:
             self._capture.release()
             self._capture = None
+            self.reconnects += 1
+            self.connected_at = None
+
+    def stats(self) -> dict[str, Any]:
+        payload = super().stats()
+        payload.update(
+            {
+                "kind": "opencv",
+                "transport": self.transport if is_network_source(self.source_url) else "local",
+                "source": redact_source(self.source_url),
+                "connected": self._capture is not None,
+                "last_error": self.last_error,
+            }
+        )
+        return payload
 
 
 class DemoFrameSource(FrameSource):
@@ -144,7 +329,8 @@ class DemoFrameSource(FrameSource):
 
     def open(self) -> None:
         self._started_at = time.monotonic()
-        logger.info("Demo camera started: %s", self.name)
+        self.connected_at = datetime.now(UTC)
+        logger.warning("DEMO camera started: %s (synthetic frames, not a real stream)", self.name)
 
     def close(self) -> None:
         return None
@@ -165,10 +351,14 @@ class DemoFrameSource(FrameSource):
         )
         image, meta = render_scene(scenario, self.width, self.height, phase, self._sequence)
         self.last_meta = meta
+        self.frames_read += 1
+        self.last_frame_at = datetime.now(UTC)
         return image
 
-    def meta(self) -> dict[str, Any]:
-        return self.last_meta
+    def stats(self) -> dict[str, Any]:
+        payload = super().stats()
+        payload.update({"kind": "demo", "synthetic": True, "source": "demo"})
+        return payload
 
 
 def _gradient_background(width: int, height: int, sequence: int) -> Image:
@@ -341,3 +531,15 @@ def render_scene(
         cv2.LINE_AA,
     )
     return image, meta
+
+
+__all__ = [
+    "DemoFrameSource",
+    "FrameSource",
+    "OpenCVFrameSource",
+    "expand_env_source",
+    "is_network_source",
+    "normalise_capture_target",
+    "redact_source",
+    "render_scene",
+]

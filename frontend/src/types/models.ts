@@ -98,6 +98,7 @@ export interface Camera {
   status: CameraStatus;
   fps_limit: number;
   position: string;
+  resolution: string | null;
   last_frame_at: string | null;
   last_error: string | null;
   notes: string | null;
@@ -505,6 +506,78 @@ export interface VisionPipelineStatus {
   warnings: string[];
   face_gallery_size: number;
   similarity_threshold: number;
+}
+
+export interface CameraHealthItem {
+  camera_id: string;
+  name: string;
+  gate_id: string;
+  gate_name: string;
+  gate_code: string;
+  source_type: string;
+  source: string;
+  is_active: boolean;
+  status: string;
+  stale: boolean;
+  resolution: string | null;
+  fps_limit: number;
+  last_frame_at: string | null;
+  frame_age_seconds: number | null;
+  last_error: string | null;
+  worker_alive: boolean | null;
+  observed_fps: number | null;
+}
+
+export interface CameraHealthResponse {
+  compound_id: string;
+  generated_at: string;
+  stale_after_seconds: number;
+  counts: {
+    total: number;
+    online: number;
+    offline: number;
+    error: number;
+    disabled: number;
+    stale: number;
+    demo: number;
+  };
+  total: number;
+  online: number;
+  offline: number;
+  error: number;
+  disabled: number;
+  stale: number;
+  demo: number;
+  cameras: CameraHealthItem[];
+}
+
+export interface CameraProbeResult {
+  ok: boolean;
+  camera_id: string;
+  camera_name: string;
+  source: string;
+  source_type: string;
+  frames: number;
+  latency_ms: number;
+  open_ms: number;
+  width: number | null;
+  height: number | null;
+  brightness: number | null;
+  preview_url: string | null;
+  error: string | null;
+  hint: string | null;
+}
+
+export interface RealModeStatus {
+  mode: string;
+  real_detections_only: boolean;
+  engine_ready: boolean;
+  warnings: string[];
+  cameras_total: number;
+  cameras_online: number;
+  demo_cameras: number;
+  barrier_driver: string;
+  models: Record<string, string>;
 }
 
 export type BarrierDriver = "simulator" | "webhook" | "mqtt" | "gpio";

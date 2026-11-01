@@ -73,6 +73,38 @@ def otsu_variants(crop: Image) -> list[Image]:
     return [crop, cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR), cv2.cvtColor(adaptive, cv2.COLOR_GRAY2BGR)]
 
 
+def mean_brightness(image: Image) -> float:
+    """Return the mean luma of a frame (0-255), used for night detection."""
+    if image.size == 0:
+        return 0.0
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    return float(gray.mean())
+
+
+def enhance_low_light(image: Image, clip_limit: float = 2.5) -> Image:
+    """Contrast-stretch a night/IR frame before detection.
+
+    Entrance cameras in Egyptian compounds are usually lit by IR after sunset;
+    the resulting frames are dark and low-contrast, which destroys both the
+    plate detector and OCR. A per-channel CLAHE in LAB space lifts the plate
+    without clipping the highlights of headlights.
+    """
+    if image.size == 0:
+        return image
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    luma, a_channel, b_channel = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=max(1.0, clip_limit), tileGridSize=(8, 8))
+    merged = cv2.merge((clahe.apply(luma), a_channel, b_channel))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def frame_signature(image: Image, size: int = 16) -> bytes:
+    """Return a compact perceptual signature used to detect a frozen stream."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    small = cv2.resize(gray, (size, size), interpolation=cv2.INTER_AREA)
+    return small.tobytes()
+
+
 def blur_score(crop: Image) -> float:
     """Laplacian variance; higher is sharper (used for enrollment quality)."""
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop

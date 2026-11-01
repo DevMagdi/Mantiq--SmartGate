@@ -3,6 +3,9 @@ import type { MessageResponse } from "@/types/api";
 import type {
   ActuatorStatusResponse,
   ActuatorTestResult,
+  CameraHealthResponse,
+  CameraProbeResult,
+  RealModeStatus,
   VisionAnalyzeResult,
   VisionPipelineStatus,
 } from "@/types/models";
@@ -37,9 +40,25 @@ export async function confirmReview(logId: string): Promise<MessageResponse> {
   return data;
 }
 
-export async function fetchCameraHealth(): Promise<Record<string, number>> {
-  const { data } = await api.get<Record<string, number>>("/cv/camera-health");
+export async function fetchCameraHealth(): Promise<CameraHealthResponse> {
+  const { data } = await api.get<CameraHealthResponse>("/cv/camera-health");
   return data;
+}
+
+export async function fetchRealModeStatus(): Promise<RealModeStatus> {
+  const { data } = await api.get<RealModeStatus>("/cv/real-mode");
+  return data;
+}
+
+export async function testCameraStream(cameraId: string): Promise<CameraProbeResult> {
+  const { data } = await api.post<CameraProbeResult>(`/cv/cameras/${cameraId}/test`, null, {
+    timeout: 45_000,
+  });
+  return data;
+}
+
+export function cameraSnapshotUrl(cameraId: string): string {
+  return `/cv/cameras/${cameraId}/snapshot`;
 }
 
 export async function fetchWorkers(): Promise<Record<string, unknown>> {

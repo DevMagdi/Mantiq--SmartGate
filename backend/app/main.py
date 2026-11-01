@@ -62,6 +62,22 @@ async def _startup_tasks(app: FastAPI) -> None:
             await connection.run_sync(Base.metadata.create_all)
         logger.info("Database schema ensured (AUTO_CREATE_TABLES=true)")
 
+    # A real install starts empty (SEED_DEMO_DATA=false) but still needs one
+    # account to log in with: create the bootstrap admin when no user exists.
+    try:
+        from app.db.session import session_scope
+        from app.services.seed_service import seed_service
+
+        async with session_scope() as session:
+            bootstrap_admin = await seed_service.ensure_admin(session)
+        if bootstrap_admin is not None and not settings.SEED_DEMO_DATA:
+            logger.info(
+                "Bootstrap admin ready: %s — change the password after the first login",
+                bootstrap_admin.email,
+            )
+    except Exception:  # pragma: no cover - defensive: never block boot
+        logger.exception("Could not prepare the bootstrap administrator")
+
     if settings.SEED_DEMO_DATA:
         try:
             from app.services.seed_service import seed_demo_data
@@ -70,6 +86,27 @@ async def _startup_tasks(app: FastAPI) -> None:
             logger.info("Startup seeding completed: %s", stats)
         except Exception:  # pragma: no cover - defensive: never block boot on seed
             logger.exception("Startup seeding failed; continuing without demo data")
+
+    # Cameras declared in CAMERAS_JSON are applied on every boot so a compose
+    # file (or a k8s ConfigMap) is enough to wire up a real site.
+    if (settings.CAMERAS_JSON or "").strip():
+        try:
+            from app.db.session import session_scope
+            from app.services.camera_service import camera_service
+
+            async with session_scope() as session:
+                created = await camera_service.ensure_from_env(session)
+            if created:
+                logger.info("Cameras imported from CAMERAS_JSON: %s", ", ".join(created))
+        except Exception:  # pragma: no cover - never block boot on camera config
+            logger.exception("Could not apply CAMERAS_JSON")
+
+    if settings.CV_MODE == "mock":
+        logger.warning(
+            "CV_MODE=mock — detections are SIMULATED. Set CV_MODE=real for a live deployment."
+        )
+    for warning in settings.cv_warnings():
+        logger.warning("Vision configuration: %s", warning)
 
     set_app_info(__version__, settings.ENVIRONMENT, settings.CV_MODE)
     set_engine_state(ready=settings.CV_MODE == "mock", mode=settings.CV_MODE)

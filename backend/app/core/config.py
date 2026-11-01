@@ -87,13 +87,19 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------- cv
     CV_ENABLED: bool = True
     CV_RUNNER_ENABLED: bool = True
-    CV_MODE: CvMode = "mock"
+    # Real inference (YOLO + OCR + InsightFace) is the production default.
+    # ``CV_MODE=mock`` must be requested explicitly and is only meant for
+    # offline development, tests and the scripted demo.
+    CV_MODE: CvMode = "real"
     CV_PLATE_DETECTOR: str = "yolo"  # yolo | mock
     CV_PLATE_MODEL_PATH: str = "models/plate_yolov8.pt"
     CV_YOLO_IMAGE_SIZE: int = 640
     CV_YOLO_IOU: float = 0.45
     CV_YOLO_DEVICE: str = ""  # "" = auto (CUDA when present), "cpu", "0", "cuda:1"
     CV_YOLO_HALF: bool = False
+    # Class names used to pick plates out of a multi-class model. Ignored when
+    # the model has none of them (single-class custom plate weights).
+    CV_PLATE_CLASS_NAMES: str = "plate,license_plate,number_plate,plate_number"
     CV_OCR_ALLOWLIST: bool = True
 
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
@@ -110,8 +116,36 @@ class Settings(BaseSettings):
     CV_DEDUPE_SECONDS: float = 8.0
     CV_FRAME_WIDTH: int = 1280
     CV_SNAPSHOT_QUALITY: int = 85
-    CV_DEMO_CAMERAS: bool = True
+    CV_DEMO_CAMERAS: bool = False
     CV_DEMO_INTERVAL_SECONDS: float = 9.0
+    # Frame suppression: an idle lane (empty frame) never reaches the OCR stage.
+    CV_MOTION_MIN_AREA_RATIO: float = 0.004
+
+    # ------------------------------------------------------- camera transport
+    # RTSP over TCP is the only reliable transport for most IP cameras and NVRs;
+    # UDP drops key-frames on Wi-Fi links and produces smeared plates.
+    CV_RTSP_TRANSPORT: Literal["tcp", "udp", "auto"] = "tcp"
+    CV_RTSP_OPEN_TIMEOUT_MS: int = 5000
+    CV_RTSP_READ_TIMEOUT_MS: int = 5000
+    CV_RECONNECT_DELAY_SECONDS: float = 2.0
+    CV_RECONNECT_MAX_DELAY_SECONDS: float = 30.0
+    CV_STALL_TIMEOUT_SECONDS: float = 20.0
+    CV_CAMERA_PROBE_FRAMES: int = 5
+
+    # ------------------------------------------------------------- low light
+    # Night frames are contrast-stretched (CLAHE) before detection/OCR. This is
+    # what makes IR-lit entrance cameras usable after sunset.
+    CV_LOW_LIGHT_ENHANCE: bool = True
+    CV_LOW_LIGHT_THRESHOLD: float = 70.0
+    CV_LOW_LIGHT_CLIP_LIMIT: float = 2.5
+
+    # ---------------------------------------------------------- safety rails
+    # A ``demo`` camera source renders synthetic frames. It must never be served
+    # in a real deployment unless the operator opts in explicitly.
+    CV_ALLOW_DEMO_SOURCES: bool = False
+    # Bootstrap cameras from the environment on startup (JSON list). See
+    # ``docs/real-deployment.md`` for the schema.
+    CAMERAS_JSON: str = ""
 
     # Deployment-wide barrier defaults. A compound policy always wins; these
     # let ops point every gate at one controller through the environment.
@@ -188,6 +222,41 @@ class Settings(BaseSettings):
         }
     )
 
+    def cv_warnings(self) -> list[str]:
+        """Return configuration problems that make real inference unreliable."""
+        issues: list[str] = []
+        if self.CV_MODE == "mock":
+            issues.append(
+                "CV_MODE=mock: detections are simulated, not read from cameras. "
+                "Set CV_MODE=real for a live deployment."
+            )
+            if self.is_production:
+                issues.append(
+                    "CV_MODE=mock in a production environment: nothing on the Live Monitor is "
+                    "a real detection. Set CV_MODE=real before showing this to a client."
+                )
+            return issues
+        if (self.CV_PLATE_DETECTOR or "").lower() == "mock":
+            issues.append("CV_PLATE_DETECTOR=mock in real mode: plates are simulated")
+        if (self.CV_OCR_ENGINE or "").lower() == "mock":
+            issues.append("CV_OCR_ENGINE=mock in real mode: plate text is simulated")
+        if (self.CV_FACE_ENGINE or "").lower() == "mock":
+            issues.append("CV_FACE_ENGINE=mock in real mode: face matches are simulated")
+        if self.CV_DEMO_CAMERAS and not self.CV_ALLOW_DEMO_SOURCES:
+            issues.append(
+                "CV_DEMO_CAMERAS=true is ignored in real mode unless CV_ALLOW_DEMO_SOURCES=true"
+            )
+        if (
+            self.is_production
+            and self.CV_OCR_ENGINE == "easyocr"
+            and "ar" not in self.CV_OCR_LANGUAGES
+        ):
+            issues.append(
+                "CV_OCR_LANGUAGES does not include 'ar'; purely Arabic plates will fail to read "
+                "(add 'ar' to CV_OCR_LANGUAGES)"
+            )
+        return issues
+
     def security_warnings(self) -> list[str]:
         """Return configuration problems operators must fix before going live."""
         problems: list[str] = []
@@ -198,6 +267,15 @@ class Settings(BaseSettings):
             problems.append("SECRET_KEY is shorter than 32 characters")
         if "*" in self.CORS_ORIGINS:
             problems.append("CORS_ORIGINS allows every origin; list the dashboard origins explicitly")
+        if self.is_production and self.SEED_ADMIN_PASSWORD.strip() in {
+            "Admin@12345",
+            "admin@12345",
+            "admin123",
+        }:
+            problems.append(
+                "Bootstrap admin password is the shipped default; change it after the first login "
+                "or set SEED_ADMIN_PASSWORD explicitly"
+            )
         if "*" in self.TRUSTED_HOSTS:
             problems.append("TRUSTED_HOSTS is unrestricted; set the real API host names")
         if self.DEBUG:
@@ -229,8 +307,7 @@ class Settings(BaseSettings):
             )
         if self.is_sqlite:
             warnings.append("SQLite is not recommended for production; use PostgreSQL")
-        if self.CV_MODE == "mock":
-            warnings.append("CV_MODE=mock: gate decisions are simulated, not from real cameras")
+        warnings.extend(self.cv_warnings())
         return warnings
 
     def ensure_directories(self) -> None:

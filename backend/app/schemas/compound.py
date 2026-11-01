@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.enums import (
     CameraSourceType,
@@ -202,20 +202,39 @@ class CameraUpdate(BaseModel):
 
 
 class CameraRead(ORMModel):
+    """Camera as returned to the dashboard (credentials masked)."""
+
     id: uuid.UUID
     gate_id: uuid.UUID
     name: str
     source_type: CameraSourceType
     source_url: str
+    has_credentials: bool = False
     is_active: bool
     status: CameraStatus
     fps_limit: float
     position: str
+    resolution: str | None = None
     last_frame_at: datetime | None
     last_error: str | None
     notes: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("source_url")
+    @classmethod
+    def _mask_source_url(cls, value: str) -> str:
+        """Never leak RTSP passwords to the dashboard or to API clients."""
+        from app.cv.sources import redact_source
+        from app.cv.sources import expand_env_source
+
+        return redact_source(expand_env_source(value))
+
+    @model_validator(mode="after")
+    def _flag_credentials(self) -> "CameraRead":
+        """Tell the dashboard whether the stream carries a password."""
+        self.has_credentials = "***@" in self.source_url
+        return self
 
 
 class CameraBrief(ORMModel):

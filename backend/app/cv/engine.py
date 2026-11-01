@@ -58,10 +58,12 @@ class VisionEngine:
             if self._pipeline is not None:
                 return self._pipeline
             if self.mode == "mock":
-                self._warnings.append(
+                notice = (
                     "Mock vision engine active: detections are simulated for the offline demo "
                     "(set CV_MODE=real to use YOLO + OCR + InsightFace)."
                 )
+                if notice not in self._warnings:
+                    self._warnings.append(notice)
                 plate_detector: Any = MockPlateDetector()
                 plate_reader: Any = MockPlateReader()
                 face_detector: Any = MockFaceDetector()
@@ -173,7 +175,12 @@ class VisionEngine:
         options: VisionOptions | None = None,
     ) -> VisionResult:
         """Run the pipeline under the global inference lock."""
-        if self.mode == "real" and self._warmed and not self._ready:
+        if self.mode == "real" and not self._ready:
+            # A real deployment must fail loudly instead of returning empty
+            # results: an operator who sees "no plate" needs to know whether the
+            # camera or the model is the problem.
+            self.warmup()
+        if self.mode == "real" and not self._ready:
             raise VisionEngineError(
                 self._load_error or "Vision models are not available. Check the CV configuration."
             )
