@@ -22,6 +22,7 @@ import {
   Th,
 } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { useI18n } from "@/i18n";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useToast } from "@/hooks/useToast";
 import { listCompounds } from "@/services/admin";
@@ -89,6 +90,7 @@ const EMPTY_PERMIT: PermitForm = {
 };
 
 export function VisitorsPage(): JSX.Element {
+  const { t } = useI18n();
   const { hasRole } = useAuth();
   const isManager = hasRole("admin", "security_officer");
   const toast = useToast();
@@ -106,7 +108,7 @@ export function VisitorsPage(): JSX.Element {
   const [permitOpen, setPermitOpen] = useState(false);
   const [permitForm, setPermitForm] = useState<PermitForm>(EMPTY_PERMIT);
   const [permitToRevoke, setPermitToRevoke] = useState<Permit | null>(null);
-  const [revokeReason, setRevokeReason] = useState("Permit no longer required");
+  const [revokeReason, setRevokeReason] = useState("");
   const [visitorToReject, setVisitorToReject] = useState<Visitor | null>(null);
 
   useEffect(() => {
@@ -152,7 +154,7 @@ export function VisitorsPage(): JSX.Element {
     enabled: isManager && permitOpen,
   });
 
-  const unitOptions = units.data?.items ?? (myProfile.data ? [{ id: myProfile.data.unit_id, label: myProfile.data.unit?.label ?? "My unit", building: myProfile.data.unit?.building ?? "" }] : []);
+  const unitOptions = units.data?.items ?? (myProfile.data ? [{ id: myProfile.data.unit_id, label: myProfile.data.unit?.label ?? t("visitors.my_unit"), building: myProfile.data.unit?.building ?? "" }] : []);
   const defaultUnitId = myProfile.data?.unit_id ?? unitOptions[0]?.id ?? "";
 
   const invalidate = async (): Promise<void> => {
@@ -163,7 +165,7 @@ export function VisitorsPage(): JSX.Element {
 
   const createVisitorMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!compound && isManager) throw new Error("No compound available");
+      if (!compound && isManager) throw new Error(t("visitors.error.no_compound"));
       const payload: VisitorPayload = {
         compound_id: compound?.id ?? myProfile.data?.compound_id ?? "",
         host_unit_id: visitorForm.host_unit_id || defaultUnitId,
@@ -178,22 +180,25 @@ export function VisitorsPage(): JSX.Element {
       await createVisitor(payload);
     },
     onSuccess: async () => {
-      toast.success("Visitor request created", isManager ? "Approve it and issue a permit when ready." : "Security will review the request.");
+      toast.success(
+        t("visitors.toast.created"),
+        isManager ? t("visitors.toast.created_hint_manager") : t("visitors.toast.created_hint_resident"),
+      );
       setVisitorOpen(false);
       setVisitorForm(EMPTY_VISITOR);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not create visitor", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("visitors.toast.create_error"), apiErrorMessage(error)),
   });
 
   const actionMutation = useMutation({
     mutationFn: ({ visitorId, action }: { visitorId: string; action: VisitorAction }) => visitorAction(visitorId, action),
     onSuccess: async (_visitor, variables) => {
-      toast.success(`Visitor ${variables.action.replace("-", " ")}d`);
+      toast.success(t("visitors.toast.action_done", { action: t(`visitors.action.${variables.action === "check-in" ? "check_in" : variables.action === "check-out" ? "check_out" : variables.action}`) }));
       setVisitorToReject(null);
       await invalidate();
     },
-    onError: (error) => toast.error("Visitor action failed", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("visitors.toast.action_error"), apiErrorMessage(error)),
   });
 
   const permitMutation = useMutation({
@@ -212,22 +217,22 @@ export function VisitorsPage(): JSX.Element {
       await createPermit(payload);
     },
     onSuccess: async () => {
-      toast.success("Permit issued", "The plate can now pass through the gate while the permit is valid.");
+      toast.success(t("visitors.toast.permit_issued"), t("visitors.toast.permit_issued_hint"));
       setPermitOpen(false);
       setPermitForm(EMPTY_PERMIT);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not issue permit", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("visitors.toast.permit_error"), apiErrorMessage(error)),
   });
 
   const revokeMutation = useMutation({
     mutationFn: ({ permitId, reason }: { permitId: string; reason: string }) => revokePermit(permitId, reason),
     onSuccess: async () => {
-      toast.success("Permit revoked");
+      toast.success(t("visitors.toast.revoked"));
       setPermitToRevoke(null);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not revoke permit", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("visitors.toast.revoke_error"), apiErrorMessage(error)),
   });
 
   const openVisitorModal = (): void => {
@@ -250,18 +255,18 @@ export function VisitorsPage(): JSX.Element {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow={isManager ? "Access scheduling" : "My visitors"}
-        title={isManager ? "Visitors & permits" : "My visitors & permits"}
-        subtitle="Temporary permits with a start, an expiry and an entry budget — enforced automatically by the gate controller."
+        eyebrow={isManager ? t("visitors.eyebrow.manager") : t("visitors.eyebrow.resident")}
+        title={isManager ? t("visitors.title.manager") : t("visitors.title.resident")}
+        subtitle={t("visitors.subtitle")}
         actions={
           <>
             {isManager ? (
               <Button variant="outline" icon="key" onClick={() => openPermitModal()}>
-                Issue permit
+                {t("visitors.issue_permit")}
               </Button>
             ) : null}
             <Button icon="plus" onClick={openVisitorModal}>
-              {isManager ? "Register visitor" : "Request visitor"}
+              {isManager ? t("visitors.register") : t("visitors.request")}
             </Button>
           </>
         }
@@ -270,22 +275,22 @@ export function VisitorsPage(): JSX.Element {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs
           tabs={[
-            { key: "visitors", label: "Visitors", count: totalVisitors },
-            { key: "permits", label: "Permits", count: permitsQuery.data?.total },
+            { key: "visitors", label: t("visitors.tab.visitors"), count: totalVisitors },
+            { key: "permits", label: t("visitors.tab.permits"), count: permitsQuery.data?.total },
           ]}
           value={tab}
           onChange={(key) => { setTab(key); setStatusFilter(""); }}
         />
         <div className="flex flex-wrap items-center gap-2">
-          <SearchInput value={search} onChange={setSearch} placeholder={tab === "visitors" ? "Search visitors…" : "Search permits or plates…"} className="w-full sm:w-64" />
+          <SearchInput value={search} onChange={setSearch} placeholder={tab === "visitors" ? t("visitors.search.visitors") : t("visitors.search.permits")} className="w-full sm:w-64" />
           <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-40">
-            <option value="">All statuses</option>
+            <option value="">{t("common.all_statuses")}</option>
             {tab === "visitors"
               ? ["pending", "approved", "checked_in", "checked_out", "rejected", "expired"].map((value) => (
-                  <option key={value} value={value}>{value.replace("_", " ")}</option>
+                  <option key={value} value={value}>{t(`status.${value}`)}</option>
                 ))
               : ["pending", "active", "expired", "revoked"].map((value) => (
-                  <option key={value} value={value}>{value}</option>
+                  <option key={value} value={value}>{t(`status.${value}`)}</option>
                 ))}
           </Select>
         </div>
@@ -298,21 +303,21 @@ export function VisitorsPage(): JSX.Element {
           (visitorsQuery.data?.items ?? []).length === 0 ? (
             <EmptyState
               icon="visitors"
-              title="No visitors yet"
-              description={isManager ? "Register a visitor or wait for a resident request." : "Request a visitor and security will approve it."}
-              action={<Button icon="plus" onClick={openVisitorModal}>Register visitor</Button>}
+              title={t("visitors.empty.visitors_title")}
+              description={isManager ? t("visitors.empty.visitors_desc_manager") : t("visitors.empty.visitors_desc_resident")}
+              action={<Button icon="plus" onClick={openVisitorModal}>{t("visitors.register")}</Button>}
             />
           ) : (
             <>
               <TableShell>
                 <thead>
                   <tr>
-                    <Th>Visitor</Th>
-                    <Th>Host unit</Th>
-                    <Th>Purpose</Th>
-                    <Th>Expected</Th>
-                    <Th>Status</Th>
-                    <Th align="right">Actions</Th>
+                    <Th>{t("common.visitor")}</Th>
+                    <Th>{t("visitors.table.unit")}</Th>
+                    <Th>{t("visitors.table.purpose")}</Th>
+                    <Th>{t("visitors.table.expected")}</Th>
+                    <Th>{t("common.status")}</Th>
+                    <Th align="right">{t("common.actions")}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -322,33 +327,33 @@ export function VisitorsPage(): JSX.Element {
                       <tr key={visitor.id} className="transition hover:bg-ink-50/70 dark:hover:bg-ink-800/30">
                         <Td>
                           <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{visitor.full_name}</p>
-                          <p className="text-[10px] text-ink-400">{visitor.phone ?? visitor.email ?? "No contact"}</p>
+                          <p className="text-[10px] text-ink-400">{visitor.phone ?? visitor.email ?? t("common.no_contact")}</p>
                         </Td>
                         <Td className="text-xs">{visitor.host_unit?.label ?? "—"}</Td>
                         <Td className="max-w-[220px] truncate text-xs">{visitor.purpose ?? "—"}</Td>
                         <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">{formatDateTime(visitor.expected_arrival)}</Td>
                         <Td>
                           <div className="flex items-center gap-1.5">
-                            <Badge tone={meta.tone} dot>{meta.label}</Badge>
-                            {visitor.active_permit_count > 0 ? <Badge tone="info">{visitor.active_permit_count} permits</Badge> : null}
+                            <Badge tone={meta.tone} dot>{t(`status.${visitor.status}`)}</Badge>
+                            {visitor.active_permit_count > 0 ? <Badge tone="info">{t("visitors.permits_count", { count: visitor.active_permit_count })}</Badge> : null}
                           </div>
                         </Td>
                         <Td align="right">
                           <div className="flex flex-wrap justify-end gap-1">
                             {isManager && visitor.status === "pending" ? (
                               <>
-                                <Button size="sm" variant="subtle" icon="check" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "approve" })}>Approve</Button>
-                                <Button size="sm" variant="ghost" icon="x" onClick={() => setVisitorToReject(visitor)}>Reject</Button>
+                                <Button size="sm" variant="subtle" icon="check" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "approve" })}>{t("visitors.action.approve")}</Button>
+                                <Button size="sm" variant="ghost" icon="x" onClick={() => setVisitorToReject(visitor)}>{t("visitors.action.reject")}</Button>
                               </>
                             ) : null}
                             {isManager && visitor.status === "approved" ? (
-                              <Button size="sm" variant="subtle" icon="play" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "check-in" })}>Check in</Button>
+                              <Button size="sm" variant="subtle" icon="play" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "check-in" })}>{t("visitors.action.check_in")}</Button>
                             ) : null}
                             {isManager && visitor.status === "checked_in" ? (
-                              <Button size="sm" variant="outline" icon="logout" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "check-out" })}>Check out</Button>
+                              <Button size="sm" variant="outline" icon="logout" onClick={() => actionMutation.mutate({ visitorId: visitor.id, action: "check-out" })}>{t("visitors.action.check_out")}</Button>
                             ) : null}
                             {isManager ? (
-                              <Button size="sm" variant="ghost" icon="key" onClick={() => openPermitModal(visitor)}>Permit</Button>
+                              <Button size="sm" variant="ghost" icon="key" onClick={() => openPermitModal(visitor)}>{t("visitors.action.permit")}</Button>
                             ) : null}
                           </div>
                         </Td>
@@ -372,22 +377,22 @@ export function VisitorsPage(): JSX.Element {
         ) : (permitsQuery.data?.items ?? []).length === 0 ? (
           <EmptyState
             icon="key"
-            title="No permits issued"
-            description="Issue a temporary permit to authorise a visitor's vehicle at the barrier."
-            action={isManager ? <Button icon="plus" onClick={() => openPermitModal()}>Issue permit</Button> : undefined}
+            title={t("visitors.empty.permits_title")}
+            description={t("visitors.empty.permits_desc")}
+            action={isManager ? <Button icon="plus" onClick={() => openPermitModal()}>{t("visitors.issue_permit")}</Button> : undefined}
           />
         ) : (
           <>
             <TableShell>
               <thead>
                 <tr>
-                  <Th>Permit</Th>
-                  <Th>Visitor</Th>
-                  <Th>Vehicle</Th>
-                  <Th>Valid window</Th>
-                  <Th>Entries</Th>
-                  <Th>Status</Th>
-                  {isManager ? <Th align="right">Actions</Th> : null}
+                  <Th>{t("visitors.table.permit")}</Th>
+                  <Th>{t("common.visitor")}</Th>
+                  <Th>{t("common.vehicle")}</Th>
+                  <Th>{t("visitors.table.window")}</Th>
+                  <Th>{t("visitors.table.entries")}</Th>
+                  <Th>{t("common.status")}</Th>
+                  {isManager ? <Th align="right">{t("common.actions")}</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -397,7 +402,7 @@ export function VisitorsPage(): JSX.Element {
                     <tr key={permit.id} className="transition hover:bg-ink-50/70 dark:hover:bg-ink-800/30">
                       <Td>
                         <p className="font-mono text-xs font-semibold text-ink-900 dark:text-ink-100">{permit.permit_code}</p>
-                        <p className="text-[10px] capitalize text-ink-400">{permit.permit_type.replace("_", " ")}</p>
+                        <p className="text-[10px] capitalize text-ink-400">{t(`visitors.permit_type.${permit.permit_type}`)}</p>
                       </Td>
                       <Td className="text-xs">
                         {permit.visitor?.full_name ?? "—"}
@@ -407,7 +412,7 @@ export function VisitorsPage(): JSX.Element {
                         {permit.vehicle_plate ? (
                           <span className="rounded border border-ink-300 bg-white px-1.5 py-0.5 font-mono text-[10px] font-bold dark:border-ink-600 dark:bg-ink-950">{permit.vehicle_plate}</span>
                         ) : (
-                          <span className="text-[11px] text-ink-400">Pedestrian</span>
+                          <span className="text-[11px] text-ink-400">{t("visitors.pedestrian")}</span>
                         )}
                       </Td>
                       <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">
@@ -426,17 +431,17 @@ export function VisitorsPage(): JSX.Element {
                           <span className="text-[10px] text-ink-500 dark:text-ink-400">{permit.entries_used}/{permit.max_entries}</span>
                         </div>
                       </Td>
-                      <Td><Badge tone={meta.tone} dot>{meta.label}</Badge></Td>
+                      <Td><Badge tone={meta.tone} dot>{t(`status.${permit.status}`)}</Badge></Td>
                       {isManager ? (
                         <Td align="right">
                           <div className="flex justify-end gap-1">
                             {permit.status === "active" || permit.status === "pending" ? (
                               <>
-                                <Button size="sm" variant="ghost" icon="visitors" onClick={() => actionMutation.mutate({ visitorId: permit.visitor_id, action: "check-in" })}>Check in</Button>
-                                <Button size="sm" variant="ghost" icon="x" onClick={() => { setPermitToRevoke(permit); setRevokeReason("Permit no longer required"); }}>Revoke</Button>
+                                <Button size="sm" variant="ghost" icon="visitors" onClick={() => actionMutation.mutate({ visitorId: permit.visitor_id, action: "check-in" })}>{t("visitors.action.check_in")}</Button>
+                                <Button size="sm" variant="ghost" icon="x" onClick={() => { setPermitToRevoke(permit); setRevokeReason(t("visitors.revoke.default_reason")); }}>{t("visitors.action.revoke")}</Button>
                               </>
                             ) : (
-                              <span className="text-[10px] text-ink-400">{permit.revoked_reason ?? "Closed"}</span>
+                              <span className="text-[10px] text-ink-400">{permit.revoked_reason ?? t("visitors.closed")}</span>
                             )}
                           </div>
                         </Td>
@@ -463,72 +468,72 @@ export function VisitorsPage(): JSX.Element {
       <Modal
         open={visitorOpen}
         onClose={() => setVisitorOpen(false)}
-        title={isManager ? "Register a visitor" : "Request a visitor"}
-        description={isManager ? "Create the visitor record, then issue a temporary permit." : "Security will review your request before a permit is issued."}
+        title={isManager ? t("visitors.modal.register_title") : t("visitors.modal.request_title")}
+        description={isManager ? t("visitors.modal.register_desc") : t("visitors.modal.request_desc")}
         size="lg"
         footer={
           <>
-            <Button variant="outline" onClick={() => setVisitorOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setVisitorOpen(false)}>{t("common.cancel")}</Button>
             <Button
               onClick={() => createVisitorMutation.mutate()}
               loading={createVisitorMutation.isPending}
               disabled={!visitorForm.full_name.trim() || !(visitorForm.host_unit_id || defaultUnitId)}
             >
-              {isManager ? "Register visitor" : "Send request"}
+              {isManager ? t("visitors.register") : t("visitors.modal.send")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Full name" required value={visitorForm.full_name} onChange={(event) => setVisitorForm({ ...visitorForm, full_name: event.target.value })} placeholder="Visitor name" />
-          <Input label="Phone" value={visitorForm.phone} onChange={(event) => setVisitorForm({ ...visitorForm, phone: event.target.value })} placeholder="+20 100 000 0000" />
-          <Input label="Email" type="email" value={visitorForm.email} onChange={(event) => setVisitorForm({ ...visitorForm, email: event.target.value })} placeholder="visitor@example.com" />
-          <Input label="Company" value={visitorForm.company} onChange={(event) => setVisitorForm({ ...visitorForm, company: event.target.value })} placeholder="Optional" />
+          <Input label={t("settings.user.full_name")} required value={visitorForm.full_name} onChange={(event) => setVisitorForm({ ...visitorForm, full_name: event.target.value })} placeholder={t("visitors.form.name_placeholder")} />
+          <Input label={t("common.phone")} value={visitorForm.phone} onChange={(event) => setVisitorForm({ ...visitorForm, phone: event.target.value })} placeholder="+20 100 000 0000" />
+          <Input label={t("common.email")} type="email" value={visitorForm.email} onChange={(event) => setVisitorForm({ ...visitorForm, email: event.target.value })} placeholder="visitor@example.com" />
+          <Input label={t("visitors.form.company")} value={visitorForm.company} onChange={(event) => setVisitorForm({ ...visitorForm, company: event.target.value })} placeholder="Optional" />
           <Select
-            label="Host unit"
+            label={t("visitors.table.unit")}
             required
             value={visitorForm.host_unit_id || defaultUnitId}
             onChange={(event) => setVisitorForm({ ...visitorForm, host_unit_id: event.target.value })}
             disabled={!isManager}
           >
-            <option value="">Select a unit…</option>
+            <option value="">{t("visitors.form.select_unit")}</option>
             {unitOptions.map((unit) => (
               <option key={unit.id} value={unit.id}>{unit.building ? `${unit.building} · ` : ""}{unit.label}</option>
             ))}
           </Select>
           <Input
-            label="Expected arrival"
+            label={t("visitors.form.expected")}
             type="datetime-local"
             value={visitorForm.expected_arrival}
             onChange={(event) => setVisitorForm({ ...visitorForm, expected_arrival: event.target.value })}
           />
-          <Input label="Purpose" value={visitorForm.purpose} onChange={(event) => setVisitorForm({ ...visitorForm, purpose: event.target.value })} placeholder="Family visit, delivery, maintenance…" className="sm:col-span-2" />
-          <Textarea label="Notes" value={visitorForm.notes} onChange={(event) => setVisitorForm({ ...visitorForm, notes: event.target.value })} className="sm:col-span-2" />
+          <Input label={t("visitors.table.purpose")} value={visitorForm.purpose} onChange={(event) => setVisitorForm({ ...visitorForm, purpose: event.target.value })} placeholder={t("visitors.form.purpose_placeholder")} className="sm:col-span-2" />
+          <Textarea label={t("common.notes")} value={visitorForm.notes} onChange={(event) => setVisitorForm({ ...visitorForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={permitOpen}
         onClose={() => setPermitOpen(false)}
-        title="Issue a temporary permit"
-        description="The gate validates the window and the entry budget on every pass."
+        title={t("visitors.permit.issue_title")}
+        description={t("visitors.permit.issue_desc")}
         size="lg"
         footer={
           <>
-            <Button variant="outline" onClick={() => setPermitOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPermitOpen(false)}>{t("common.cancel")}</Button>
             <Button
               onClick={() => permitMutation.mutate()}
               loading={permitMutation.isPending}
               disabled={!permitForm.visitor_id || !permitForm.start_at || !permitForm.end_at}
             >
-              Issue permit
+              {t("visitors.issue_permit")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Select
-            label="Visitor"
+            label={t("common.visitor")}
             required
             value={permitForm.visitor_id}
             onChange={(event) => {
@@ -541,7 +546,7 @@ export function VisitorsPage(): JSX.Element {
             }}
             className="sm:col-span-2"
           >
-            <option value="">Select a visitor…</option>
+            <option value="">{t("visitors.form.select_visitor")}</option>
             {(visitorDirectory.data?.items ?? [])
               .filter((visitor) => !["rejected", "cancelled"].includes(visitor.status))
               .map((visitor) => (
@@ -551,59 +556,59 @@ export function VisitorsPage(): JSX.Element {
               ))}
           </Select>
           <Select
-            label="Host unit"
+            label={t("visitors.table.unit")}
             value={permitForm.host_unit_id || defaultUnitId}
             onChange={(event) => setPermitForm({ ...permitForm, host_unit_id: event.target.value })}
           >
-            <option value="">Select a unit…</option>
+            <option value="">{t("visitors.form.select_unit")}</option>
             {unitOptions.map((unit) => (
               <option key={unit.id} value={unit.id}>{unit.building ? `${unit.building} · ` : ""}{unit.label}</option>
             ))}
           </Select>
-          <Select label="Permit type" value={permitForm.permit_type} onChange={(event) => setPermitForm({ ...permitForm, permit_type: event.target.value })}>
-            <option value="visitor">Visitor</option>
-            <option value="contractor">Contractor</option>
-            <option value="delivery">Delivery</option>
-            <option value="temporary_resident">Temporary resident</option>
-            <option value="event">Event</option>
+          <Select label={t("visitors.form.permit_type")} value={permitForm.permit_type} onChange={(event) => setPermitForm({ ...permitForm, permit_type: event.target.value })}>
+            <option value="visitor">{t("visitors.permit_type.visitor")}</option>
+            <option value="contractor">{t("visitors.permit_type.contractor")}</option>
+            <option value="delivery">{t("visitors.permit_type.delivery")}</option>
+            <option value="temporary_resident">{t("visitors.permit_type.temporary_resident")}</option>
+            <option value="event">{t("visitors.permit_type.event")}</option>
           </Select>
-          <Input label="Starts" type="datetime-local" required value={permitForm.start_at} onChange={(event) => setPermitForm({ ...permitForm, start_at: event.target.value })} />
-          <Input label="Expires" type="datetime-local" required value={permitForm.end_at} onChange={(event) => setPermitForm({ ...permitForm, end_at: event.target.value })} />
-          <Input label="Maximum entries" type="number" min={1} max={100} value={permitForm.max_entries} onChange={(event) => setPermitForm({ ...permitForm, max_entries: event.target.value })} />
+          <Input label={t("visitors.form.start")} type="datetime-local" required value={permitForm.start_at} onChange={(event) => setPermitForm({ ...permitForm, start_at: event.target.value })} />
+          <Input label={t("common.expires")} type="datetime-local" required value={permitForm.end_at} onChange={(event) => setPermitForm({ ...permitForm, end_at: event.target.value })} />
+          <Input label={t("visitors.form.max_entries")} type="number" min={1} max={100} value={permitForm.max_entries} onChange={(event) => setPermitForm({ ...permitForm, max_entries: event.target.value })} />
           <Input
-            label="Vehicle plate"
+            label={t("visitors.form.vehicle_plate")}
             value={permitForm.vehicle_plate}
             onChange={(event) => setPermitForm({ ...permitForm, vehicle_plate: event.target.value.toUpperCase() })}
-            placeholder="Optional · CAI 1234"
+            placeholder={t("visitors.form.vehicle_placeholder")}
             className="font-mono"
           />
-          <Textarea label="Notes" value={permitForm.notes} onChange={(event) => setPermitForm({ ...permitForm, notes: event.target.value })} className="sm:col-span-2" />
+          <Textarea label={t("common.notes")} value={permitForm.notes} onChange={(event) => setPermitForm({ ...permitForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={permitToRevoke !== null}
         onClose={() => setPermitToRevoke(null)}
-        title="Revoke permit"
+        title={t("visitors.revoke.title")}
         description={permitToRevoke ? `${permitToRevoke.permit_code} · ${permitToRevoke.visitor?.full_name ?? ""}` : undefined}
         footer={
           <>
-            <Button variant="outline" onClick={() => setPermitToRevoke(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPermitToRevoke(null)}>{t("common.cancel")}</Button>
             <Button
               variant="danger"
               loading={revokeMutation.isPending}
               disabled={revokeReason.trim().length < 3}
               onClick={() => permitToRevoke && revokeMutation.mutate({ permitId: permitToRevoke.id, reason: revokeReason })}
             >
-              Revoke permit
+              {t("visitors.revoke.confirm")}
             </Button>
           </>
         }
       >
-        <Textarea label="Reason" required value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} />
+        <Textarea label={t("common.reason")} required value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} />
         <p className="mt-2 flex items-start gap-1.5 text-[11px] text-ink-400">
           <Icon name="info" className="mt-0.5 h-3 w-3 shrink-0" />
-          Revoked permits are rejected immediately by the gate controller, including any cached lane.
+          {t("visitors.revoke.note")}
         </p>
       </Modal>
 
@@ -612,9 +617,9 @@ export function VisitorsPage(): JSX.Element {
         onClose={() => setVisitorToReject(null)}
         onConfirm={() => visitorToReject && actionMutation.mutate({ visitorId: visitorToReject.id, action: "reject" })}
         loading={actionMutation.isPending}
-        title="Reject visitor request"
-        description={`Reject the request from ${visitorToReject?.full_name ?? "this visitor"}? They will not be able to receive a permit.`}
-        confirmLabel="Reject request"
+        title={t("visitors.reject.title")}
+        description={t("visitors.reject.description", { name: visitorToReject?.full_name ?? t("common.visitor") })}
+        confirmLabel={t("visitors.reject.confirm")}
       />
     </div>
   );

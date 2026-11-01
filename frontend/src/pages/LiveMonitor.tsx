@@ -579,7 +579,7 @@ export function LiveMonitorPage(): JSX.Element {
               >
                 <option value="">{t("live.raw_image")}</option>
                 {DEMO_SCENARIOS.map((item) => (
-                  <option key={item.key} value={item.key}>{item.label}</option>
+                  <option key={item.key} value={item.key}>{t(item.labelKey)}</option>
                 ))}
               </Select>
               <Button

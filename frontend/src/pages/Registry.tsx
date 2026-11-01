@@ -24,6 +24,7 @@ import {
   Th,
 } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { useI18n } from "@/i18n";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useToast } from "@/hooks/useToast";
 import {
@@ -114,6 +115,7 @@ const EMPTY_VEHICLE: VehicleForm = {
 };
 
 export function RegistryPage(): JSX.Element {
+  const { t } = useI18n();
   const { user, hasRole } = useAuth();
   const isManager = hasRole("admin", "security_officer");
   const toast = useToast();
@@ -206,7 +208,7 @@ export function RegistryPage(): JSX.Element {
 
   const residentMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!compound) throw new Error("No compound available");
+      if (!compound) throw new Error(t("registry.error.no_compound"));
       const payload: ResidentPayload = {
         compound_id: compound.id,
         unit_id: residentForm.unit_id || unitOptions[0]?.id || "",
@@ -237,18 +239,18 @@ export function RegistryPage(): JSX.Element {
       }
     },
     onSuccess: async () => {
-      toast.success(editingResident ? "Resident updated" : "Resident registered");
+      toast.success(editingResident ? t("registry.toast.resident_updated") : t("registry.toast.resident_created"));
       setResidentOpen(false);
       setEditingResident(null);
       setResidentForm(EMPTY_RESIDENT);
       await invalidateRegistry();
     },
-    onError: (error) => toast.error("Could not save resident", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("registry.toast.resident_error"), apiErrorMessage(error)),
   });
 
   const vehicleMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!compound) throw new Error("No compound available");
+      if (!compound) throw new Error(t("registry.error.no_compound"));
       const payload: VehiclePayload = {
         compound_id: compound.id,
         resident_id: vehicleForm.resident_id || null,
@@ -280,33 +282,33 @@ export function RegistryPage(): JSX.Element {
       }
     },
     onSuccess: async () => {
-      toast.success(editingVehicle ? "Vehicle updated" : "Vehicle registered");
+      toast.success(editingVehicle ? t("registry.toast.vehicle_updated") : t("registry.toast.vehicle_created"));
       setVehicleOpen(false);
       setEditingVehicle(null);
       setVehicleForm(EMPTY_VEHICLE);
       await invalidateRegistry();
     },
-    onError: (error) => toast.error("Could not save vehicle", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("registry.toast.vehicle_error"), apiErrorMessage(error)),
   });
 
   const deleteResidentMutation = useMutation({
     mutationFn: (resident: Resident) => deleteResident(resident.id),
     onSuccess: async () => {
-      toast.success("Resident removed");
+      toast.success(t("registry.toast.resident_removed"));
       setResidentToDelete(null);
       await invalidateRegistry();
     },
-    onError: (error) => toast.error("Could not remove resident", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("registry.toast.resident_remove_error"), apiErrorMessage(error)),
   });
 
   const deleteVehicleMutation = useMutation({
     mutationFn: (vehicle: Vehicle) => deleteVehicle(vehicle.id),
     onSuccess: async () => {
-      toast.success("Vehicle removed");
+      toast.success(t("registry.toast.vehicle_removed"));
       setVehicleToDelete(null);
       await invalidateRegistry();
     },
-    onError: (error) => toast.error("Could not remove vehicle", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("registry.toast.vehicle_remove_error"), apiErrorMessage(error)),
   });
 
   const openCreateResident = (): void => {
@@ -361,33 +363,29 @@ export function RegistryPage(): JSX.Element {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow={isManager ? "Compound registry" : "My household"}
-        title={isManager ? "Residents & vehicles" : "My household"}
-        subtitle={
-          isManager
-            ? "Manage unit ownership, resident access rights and the vehicle plates registered for automatic entry."
-            : "Your unit, registered vehicles and face enrollment status."
-        }
+        eyebrow={isManager ? t("registry.eyebrow.manager") : t("registry.eyebrow.resident")}
+        title={isManager ? t("registry.title.manager") : t("registry.title.resident")}
+        subtitle={isManager ? t("registry.subtitle.manager") : t("registry.subtitle.resident")}
         actions={
           isManager ? (
             <>
               <Button variant="outline" icon="car" onClick={() => openCreateVehicle()}>
-                Add vehicle
+                {t("registry.add_vehicle")}
               </Button>
               <Button icon="plus" onClick={openCreateResident}>
-                Add resident
+                {t("registry.add_resident")}
               </Button>
             </>
           ) : (
             <Button variant="outline" icon="visitors" onClick={() => navigate("/visitors")}>
-              Invite a visitor
+              {t("registry.invite")}
             </Button>
           )
         }
       />
 
       {!isManager && myProfile.isLoading ? (
-        <Card><LoadingBlock label="Loading your household…" /></Card>
+        <Card><LoadingBlock label={t("registry.loading_household")} /></Card>
       ) : null}
 
       {!isManager && myProfile.data ? (
@@ -400,33 +398,37 @@ export function RegistryPage(): JSX.Element {
               <div className="min-w-0 flex-1">
                 <p className="text-lg font-bold">{myProfile.data.full_name}</p>
                 <p className="text-xs text-ink-500 dark:text-ink-400">
-                  Unit {myProfile.data.unit?.label ?? "—"} · {myProfile.data.role_in_unit} · since {formatDate(myProfile.data.move_in_date)}
+                  {t("registry.unit_line", {
+                    unit: myProfile.data.unit?.label ?? "—",
+                    role: t(`relation.${myProfile.data.role_in_unit}`),
+                    date: formatDate(myProfile.data.move_in_date),
+                  })}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Badge tone={RESIDENT_STATUS_META[myProfile.data.status].tone} dot>
-                    {RESIDENT_STATUS_META[myProfile.data.status].label}
+                    {t(`status.${myProfile.data.status}`)}
                   </Badge>
-                  <Badge tone="neutral">{myProfile.data.vehicle_count} vehicles</Badge>
+                  <Badge tone="neutral">{t("registry.vehicles_count", { count: myProfile.data.vehicle_count })}</Badge>
                   <Badge tone={myProfile.data.face_count > 0 ? "success" : "warning"}>
-                    {myProfile.data.face_count > 0 ? "Face enrolled" : "Face not enrolled"}
+                    {myProfile.data.face_count > 0 ? t("registry.face_enrolled") : t("registry.face_missing")}
                   </Badge>
                 </div>
               </div>
             </div>
           </Card>
           <Card>
-            <CardHeader title="Contact details" icon="users" />
+            <CardHeader title={t("registry.contact")} icon="users" />
             <dl className="space-y-3 p-5 text-sm">
               <div className="flex justify-between gap-3">
-                <dt className="text-ink-500 dark:text-ink-400">Phone</dt>
+                <dt className="text-ink-500 dark:text-ink-400">{t("common.phone")}</dt>
                 <dd className="font-medium">{myProfile.data.phone ?? "—"}</dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-ink-500 dark:text-ink-400">Email</dt>
+                <dt className="text-ink-500 dark:text-ink-400">{t("common.email")}</dt>
                 <dd className="truncate font-medium">{myProfile.data.email ?? user?.email ?? "—"}</dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-ink-500 dark:text-ink-400">National ID</dt>
+                <dt className="text-ink-500 dark:text-ink-400">{t("registry.national_id")}</dt>
                 <dd className="font-mono text-xs font-medium">{myProfile.data.national_id ?? "—"}</dd>
               </div>
             </dl>
@@ -438,8 +440,8 @@ export function RegistryPage(): JSX.Element {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Tabs
             tabs={[
-              { key: "residents", label: "Residents", count: residentsQuery.data?.total },
-              { key: "vehicles", label: "Vehicles", count: vehiclesQuery.data?.total },
+              { key: "residents", label: t("registry.tab.residents"), count: residentsQuery.data?.total },
+              { key: "vehicles", label: t("registry.tab.vehicles"), count: vehiclesQuery.data?.total },
             ]}
             value={tab}
             onChange={(key) => setTab(key)}
@@ -448,16 +450,16 @@ export function RegistryPage(): JSX.Element {
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder={tab === "residents" ? "Search residents…" : "Search by plate or owner…"}
+              placeholder={tab === "residents" ? t("registry.search.residents") : t("registry.search.vehicles")}
               className="w-full sm:w-64"
             />
             <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-36">
-              <option value="">All statuses</option>
+              <option value="">{t("common.all_statuses")}</option>
               {(tab === "residents"
                 ? ["active", "inactive", "moved_out"]
                 : ["active", "suspended", "inactive"]
               ).map((value) => (
-                <option key={value} value={value}>{value.replace("_", " ")}</option>
+                <option key={value} value={value}>{t(`status.${value}`)}</option>
               ))}
             </Select>
           </div>
@@ -473,13 +475,13 @@ export function RegistryPage(): JSX.Element {
               <TableShell>
                 <thead>
                   <tr>
-                    <Th>Resident</Th>
-                    <Th>Unit</Th>
-                    <Th>Relation</Th>
-                    <Th>Status</Th>
-                    <Th>Vehicles</Th>
-                    <Th>Faces</Th>
-                    <Th align="right">Actions</Th>
+                    <Th>{t("registry.table.resident")}</Th>
+                    <Th>{t("common.unit")}</Th>
+                    <Th>{t("registry.table.relation")}</Th>
+                    <Th>{t("common.status")}</Th>
+                    <Th>{t("registry.table.vehicles")}</Th>
+                    <Th>{t("registry.table.faces")}</Th>
+                    <Th align="right">{t("common.actions")}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -492,28 +494,28 @@ export function RegistryPage(): JSX.Element {
                           </span>
                           <div>
                             <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{resident.full_name}</p>
-                            <p className="text-[10px] text-ink-400">{resident.phone ?? resident.email ?? "No contact"}</p>
+                            <p className="text-[10px] text-ink-400">{resident.phone ?? resident.email ?? t("common.no_contact")}</p>
                           </div>
                         </div>
                       </Td>
                       <Td className="text-xs">{resident.unit?.label ?? "—"}</Td>
-                      <Td className="text-xs capitalize">{resident.role_in_unit}</Td>
+                      <Td className="text-xs capitalize">{t(`relation.${resident.role_in_unit}`)}</Td>
                       <Td>
                         <Badge tone={RESIDENT_STATUS_META[resident.status].tone} dot>
-                          {RESIDENT_STATUS_META[resident.status].label}
+                          {t(`status.${resident.status}`)}
                         </Badge>
                       </Td>
                       <Td className="text-xs">{resident.vehicle_count}</Td>
                       <Td className="text-xs">{resident.face_count}</Td>
                       <Td align="right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => openCreateVehicle(resident.id)} aria-label="Add vehicle">
+                          <Button variant="ghost" size="icon" onClick={() => openCreateVehicle(resident.id)} aria-label={t("registry.add_vehicle")}>
                             <Icon name="car" className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => openEditResident(resident)} aria-label="Edit resident">
+                          <Button variant="ghost" size="icon" onClick={() => openEditResident(resident)} aria-label={t("registry.action.edit_resident")}>
                             <Icon name="edit" className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => setResidentToDelete(resident)} aria-label="Delete resident">
+                          <Button variant="ghost" size="icon" onClick={() => setResidentToDelete(resident)} aria-label={t("registry.action.delete_resident")}>
                             <Icon name="trash" className="h-4 w-4 text-rose-500" />
                           </Button>
                         </div>
@@ -534,24 +536,24 @@ export function RegistryPage(): JSX.Element {
           ) : (
             <EmptyState
               icon="users"
-              title="No residents match the filters"
-              description="Register the first resident or adjust the search."
-              action={<Button icon="plus" onClick={openCreateResident}>Add resident</Button>}
+              title={t("registry.residents.empty_title")}
+              description={t("registry.residents.empty_desc")}
+              action={<Button icon="plus" onClick={openCreateResident}>{t("registry.add_resident")}</Button>}
             />
           )
         ) : (
           (() => {
             const vehicles = isManager ? vehiclesQuery.data?.items ?? [] : myVehicles;
             if (!isManager && vehicles.length === 0) {
-              return <EmptyState icon="car" title="No vehicles registered" description="Contact the security office to register a vehicle for your unit." />;
+              return <EmptyState icon="car" title={t("registry.vehicles.empty_title")} description={t("registry.vehicles.empty_desc_resident")} />;
             }
             if (vehicles.length === 0) {
               return (
                 <EmptyState
                   icon="car"
-                  title="No vehicles registered"
-                  description="Register a plate to let the barrier recognise it automatically."
-                  action={<Button icon="plus" onClick={() => openCreateVehicle()}>Add vehicle</Button>}
+                  title={t("registry.vehicles.empty_title")}
+                  description={t("registry.vehicles.empty_desc_manager")}
+                  action={<Button icon="plus" onClick={() => openCreateVehicle()}>{t("registry.add_vehicle")}</Button>}
                 />
               );
             }
@@ -559,20 +561,20 @@ export function RegistryPage(): JSX.Element {
               <>
                 <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3 dark:border-ink-800">
                   <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">
-                    {isManager ? "Registered vehicles" : "My vehicles"}
+                    {isManager ? t("registry.vehicles.registered") : t("registry.vehicles.mine")}
                   </p>
-                  <span className="text-[11px] text-ink-400">{vehicles.length} shown</span>
+                  <span className="text-[11px] text-ink-400">{t("registry.vehicles.shown", { count: vehicles.length })}</span>
                 </div>
                 <TableShell>
                   <thead>
                     <tr>
-                      <Th>Plate</Th>
-                      <Th>Vehicle</Th>
-                      <Th>Owner</Th>
-                      <Th>Status</Th>
-                      <Th>Inside</Th>
-                      <Th>Last seen</Th>
-                      {isManager ? <Th align="right">Actions</Th> : null}
+                      <Th>{t("common.plate")}</Th>
+                      <Th>{t("registry.table.vehicle")}</Th>
+                      <Th>{t("registry.table.owner")}</Th>
+                      <Th>{t("common.status")}</Th>
+                      <Th>{t("registry.table.inside")}</Th>
+                      <Th>{t("registry.table.last_seen")}</Th>
+                      {isManager ? <Th align="right">{t("common.actions")}</Th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -587,17 +589,17 @@ export function RegistryPage(): JSX.Element {
                           {[vehicle.make, vehicle.model].filter(Boolean).join(" ") || "—"}
                           <span className="ms-1 text-[10px] text-ink-400">{vehicle.color ?? ""}</span>
                         </Td>
-                        <Td className="text-xs">{vehicle.resident?.full_name ?? "Visitor / unassigned"}</Td>
+                        <Td className="text-xs">{vehicle.resident?.full_name ?? t("registry.vehicle.unassigned")}</Td>
                         <Td>
                           <Badge tone={VEHICLE_STATUS_META[vehicle.status].tone} dot>
-                            {VEHICLE_STATUS_META[vehicle.status].label}
+                            {t(`status.${vehicle.status}`)}
                           </Badge>
                         </Td>
                         <Td>
                           {vehicle.is_inside ? (
-                            <Badge tone="info">Inside</Badge>
+                            <Badge tone="info">{t("registry.table.inside")}</Badge>
                           ) : (
-                            <span className="text-[11px] text-ink-400">Away</span>
+                            <span className="text-[11px] text-ink-400">{t("registry.badge.away")}</span>
                           )}
                         </Td>
                         <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">
@@ -606,10 +608,10 @@ export function RegistryPage(): JSX.Element {
                         {isManager ? (
                           <Td align="right">
                             <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="icon" onClick={() => openEditVehicle(vehicle)} aria-label="Edit vehicle">
+                              <Button variant="ghost" size="icon" onClick={() => openEditVehicle(vehicle)} aria-label={t("registry.action.edit_vehicle")}>
                                 <Icon name="edit" className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} aria-label="Delete vehicle">
+                              <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} aria-label={t("registry.action.delete_vehicle")}>
                                 <Icon name="trash" className="h-4 w-4 text-rose-500" />
                               </Button>
                             </div>
@@ -638,58 +640,58 @@ export function RegistryPage(): JSX.Element {
       <Modal
         open={residentOpen}
         onClose={() => setResidentOpen(false)}
-        title={editingResident ? "Edit resident" : "Register a resident"}
-        description="Residents inherit the access policy of their unit. Primary residents receive portal accounts."
+        title={editingResident ? t("registry.modal.edit_resident") : t("registry.modal.create_resident")}
+        description={t("registry.modal.resident_desc")}
         size="lg"
         footer={
           <>
-            <Button variant="outline" onClick={() => setResidentOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setResidentOpen(false)}>{t("common.cancel")}</Button>
             <Button
               onClick={() => residentMutation.mutate()}
               loading={residentMutation.isPending}
               disabled={!residentForm.full_name.trim() || !residentForm.unit_id}
             >
-              {editingResident ? "Save changes" : "Register resident"}
+              {editingResident ? t("common.save_changes") : t("registry.register_resident")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Input
-            label="Full name"
+            label={t("settings.user.full_name")}
             required
             value={residentForm.full_name}
             onChange={(event) => setResidentForm({ ...residentForm, full_name: event.target.value })}
-            placeholder="e.g. Mariam Fathy"
+            placeholder={t("registry.form.name_placeholder")}
           />
           <Input
-            label="National ID"
+            label={t("registry.national_id")}
             value={residentForm.national_id}
             onChange={(event) => setResidentForm({ ...residentForm, national_id: event.target.value })}
-            placeholder="14-digit national ID"
+            placeholder={t("registry.form.national_id_placeholder")}
           />
           <Input
-            label="Phone"
+            label={t("common.phone")}
             value={residentForm.phone}
             onChange={(event) => setResidentForm({ ...residentForm, phone: event.target.value })}
             placeholder="+20 100 000 0000"
           />
           <Input
-            label="Email"
+            label={t("common.email")}
             type="email"
             value={residentForm.email}
             onChange={(event) => setResidentForm({ ...residentForm, email: event.target.value })}
             placeholder="resident@example.com"
           />
           <Select
-            label="Unit"
+            label={t("common.unit")}
             required
             value={residentForm.unit_id}
             onChange={(event) => setResidentForm({ ...residentForm, unit_id: event.target.value })}
             disabled={Boolean(editingResident)}
-            hint={editingResident ? "Use the unit transfer workflow to move a resident." : undefined}
+            hint={editingResident ? t("registry.form.unit_locked_hint") : undefined}
           >
-            <option value="">Select a unit…</option>
+            <option value="">{t("registry.form.select_unit")}</option>
             {unitOptions.map((unit: Unit) => (
               <option key={unit.id} value={unit.id}>
                 {unit.building} · {unit.label} · {unit.status}
@@ -697,22 +699,22 @@ export function RegistryPage(): JSX.Element {
             ))}
           </Select>
           <Select
-            label="Relation to unit"
+            label={t("registry.form.relation")}
             value={residentForm.role_in_unit}
             onChange={(event) => setResidentForm({ ...residentForm, role_in_unit: event.target.value as ResidentRelationship })}
           >
-            <option value="owner">Owner</option>
-            <option value="tenant">Tenant</option>
-            <option value="family">Family member</option>
+            <option value="owner">{t("relation.owner")}</option>
+            <option value="tenant">{t("relation.tenant")}</option>
+            <option value="family">{t("relation.family")}</option>
           </Select>
           <Select
-            label="Status"
+            label={t("common.status")}
             value={residentForm.status}
             onChange={(event) => setResidentForm({ ...residentForm, status: event.target.value as ResidentStatus })}
           >
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="moved_out">Moved out</option>
+            <option value="active">{t("status.active")}</option>
+            <option value="inactive">{t("status.inactive")}</option>
+            <option value="moved_out">{t("status.moved_out")}</option>
           </Select>
           <label className="flex items-center gap-2 self-end pb-2 text-xs font-medium text-ink-600 dark:text-ink-300">
             <input
@@ -721,14 +723,14 @@ export function RegistryPage(): JSX.Element {
               onChange={(event) => setResidentForm({ ...residentForm, is_primary: event.target.checked })}
               className="h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
             />
-            Primary resident for the unit
+            {t("registry.form.primary")}
           </label>
           <Textarea
-            label="Notes"
+            label={t("common.notes")}
             value={residentForm.notes}
             onChange={(event) => setResidentForm({ ...residentForm, notes: event.target.value })}
             className="sm:col-span-2"
-            placeholder="Parking allocation, accessibility needs…"
+            placeholder={t("registry.form.notes_placeholder")}
           />
           {!editingResident ? (
             <div className="sm:col-span-2 rounded-xl border border-ink-200 p-3 dark:border-ink-700">
@@ -739,12 +741,12 @@ export function RegistryPage(): JSX.Element {
                   onChange={(event) => setResidentForm({ ...residentForm, create_account: event.target.checked })}
                   className="h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
                 />
-                Create a resident portal account
+                {t("registry.form.create_account")}
               </label>
               {residentForm.create_account ? (
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <Input label="Account password" type="password" value={residentForm.account_password} onChange={(event) => setResidentForm({ ...residentForm, account_password: event.target.value })} placeholder="Minimum 8 characters" />
-                  <p className="self-end pb-2 text-[11px] text-ink-400">The resident signs in with the email above.</p>
+                  <Input label={t("registry.form.account_password")} type="password" value={residentForm.account_password} onChange={(event) => setResidentForm({ ...residentForm, account_password: event.target.value })} placeholder={t("registry.form.account_password_placeholder")} />
+                  <p className="self-end pb-2 text-[11px] text-ink-400">{t("registry.form.account_hint")}</p>
                 </div>
               ) : null}
             </div>
@@ -755,21 +757,21 @@ export function RegistryPage(): JSX.Element {
       <Modal
         open={vehicleOpen}
         onClose={() => setVehicleOpen(false)}
-        title={editingVehicle ? "Edit vehicle" : "Register a vehicle"}
-        description="The plate is normalised for OCR matching; the display value stays readable."
+        title={editingVehicle ? t("registry.modal.edit_vehicle") : t("registry.modal.create_vehicle")}
+        description={t("registry.modal.vehicle_desc")}
         size="lg"
         footer={
           <>
-            <Button variant="outline" onClick={() => setVehicleOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setVehicleOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={() => vehicleMutation.mutate()} loading={vehicleMutation.isPending} disabled={vehicleForm.plate_number.trim().length < 3}>
-              {editingVehicle ? "Save changes" : "Register vehicle"}
+              {editingVehicle ? t("common.save_changes") : t("registry.register_vehicle")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Input
-            label="Plate number"
+            label={t("security.form.plate")}
             required
             value={vehicleForm.plate_number}
             onChange={(event) => setVehicleForm({ ...vehicleForm, plate_number: event.target.value.toUpperCase() })}
@@ -777,33 +779,33 @@ export function RegistryPage(): JSX.Element {
             className="font-mono"
           />
           <Select
-            label="Owner"
+            label={t("registry.table.owner")}
             value={vehicleForm.resident_id}
             onChange={(event) => setVehicleForm({ ...vehicleForm, resident_id: event.target.value })}
           >
-            <option value="">Visitor / unassigned</option>
+            <option value="">{t("registry.form.owner_unassigned")}</option>
             {residentOptions.map((resident) => (
               <option key={resident.id} value={resident.id}>{resident.full_name}</option>
             ))}
           </Select>
-          <Input label="Make" value={vehicleForm.make} onChange={(event) => setVehicleForm({ ...vehicleForm, make: event.target.value })} placeholder="Toyota" />
-          <Input label="Model" value={vehicleForm.model} onChange={(event) => setVehicleForm({ ...vehicleForm, model: event.target.value })} placeholder="Corolla" />
-          <Input label="Colour" value={vehicleForm.color} onChange={(event) => setVehicleForm({ ...vehicleForm, color: event.target.value })} placeholder="White" />
-          <Input label="Year" type="number" min={1950} max={2100} value={vehicleForm.year} onChange={(event) => setVehicleForm({ ...vehicleForm, year: event.target.value })} placeholder="2022" />
-          <Select label="Type" value={vehicleForm.vehicle_type} onChange={(event) => setVehicleForm({ ...vehicleForm, vehicle_type: event.target.value as VehicleType })}>
-            <option value="car">Car</option>
-            <option value="motorcycle">Motorcycle</option>
-            <option value="van">Van</option>
-            <option value="truck">Truck</option>
-            <option value="other">Other</option>
+          <Input label={t("registry.form.make")} value={vehicleForm.make} onChange={(event) => setVehicleForm({ ...vehicleForm, make: event.target.value })} placeholder="Toyota" />
+          <Input label={t("registry.form.model")} value={vehicleForm.model} onChange={(event) => setVehicleForm({ ...vehicleForm, model: event.target.value })} placeholder="Corolla" />
+          <Input label={t("registry.form.colour")} value={vehicleForm.color} onChange={(event) => setVehicleForm({ ...vehicleForm, color: event.target.value })} placeholder={t("registry.form.colour_placeholder")} />
+          <Input label={t("registry.form.year")} type="number" min={1950} max={2100} value={vehicleForm.year} onChange={(event) => setVehicleForm({ ...vehicleForm, year: event.target.value })} placeholder="2022" />
+          <Select label={t("common.type")} value={vehicleForm.vehicle_type} onChange={(event) => setVehicleForm({ ...vehicleForm, vehicle_type: event.target.value as VehicleType })}>
+            <option value="car">{t("registry.type.car")}</option>
+            <option value="motorcycle">{t("registry.type.motorcycle")}</option>
+            <option value="van">{t("registry.type.van")}</option>
+            <option value="truck">{t("registry.type.truck")}</option>
+            <option value="other">{t("registry.type.other")}</option>
           </Select>
-          <Select label="Status" value={vehicleForm.status} onChange={(event) => setVehicleForm({ ...vehicleForm, status: event.target.value as VehicleStatus })}>
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
-            <option value="inactive">Inactive</option>
+          <Select label={t("common.status")} value={vehicleForm.status} onChange={(event) => setVehicleForm({ ...vehicleForm, status: event.target.value as VehicleStatus })}>
+            <option value="active">{t("status.active")}</option>
+            <option value="suspended">{t("status.suspended")}</option>
+            <option value="inactive">{t("status.inactive")}</option>
           </Select>
-          <Input label="Sticker number" value={vehicleForm.sticker_number} onChange={(event) => setVehicleForm({ ...vehicleForm, sticker_number: event.target.value })} placeholder="Optional windshield sticker" />
-          <Textarea label="Notes" value={vehicleForm.notes} onChange={(event) => setVehicleForm({ ...vehicleForm, notes: event.target.value })} className="sm:col-span-2" />
+          <Input label={t("registry.form.sticker")} value={vehicleForm.sticker_number} onChange={(event) => setVehicleForm({ ...vehicleForm, sticker_number: event.target.value })} placeholder={t("registry.form.sticker_placeholder")} />
+          <Textarea label={t("common.notes")} value={vehicleForm.notes} onChange={(event) => setVehicleForm({ ...vehicleForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
@@ -812,9 +814,9 @@ export function RegistryPage(): JSX.Element {
         onClose={() => setResidentToDelete(null)}
         onConfirm={() => residentToDelete && deleteResidentMutation.mutate(residentToDelete)}
         loading={deleteResidentMutation.isPending}
-        title="Remove resident"
-        description={`Remove ${residentToDelete?.full_name ?? "this resident"} from the compound? Vehicles must be removed first.`}
-        confirmLabel="Remove resident"
+        title={t("registry.delete_resident.title")}
+        description={t("registry.delete_resident.desc", { name: residentToDelete?.full_name ?? t("common.resident") })}
+        confirmLabel={t("registry.delete_resident.confirm")}
       />
 
       <ConfirmDialog
@@ -822,9 +824,9 @@ export function RegistryPage(): JSX.Element {
         onClose={() => setVehicleToDelete(null)}
         onConfirm={() => vehicleToDelete && deleteVehicleMutation.mutate(vehicleToDelete)}
         loading={deleteVehicleMutation.isPending}
-        title="Remove vehicle"
-        description={`Delete ${vehicleToDelete?.plate_number ?? "this plate"} from the registry? Historical access logs are preserved.`}
-        confirmLabel="Remove vehicle"
+        title={t("registry.delete_vehicle.title")}
+        description={t("registry.delete_vehicle.desc", { plate: vehicleToDelete?.plate_number ?? t("common.plate") })}
+        confirmLabel={t("registry.delete_vehicle.confirm")}
       />
     </div>
   );

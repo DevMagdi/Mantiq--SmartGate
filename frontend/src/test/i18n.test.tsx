@@ -10,6 +10,7 @@ import { AuthProvider } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { ToastProvider } from "@/hooks/useToast";
 import { LoginPage } from "@/pages/Login";
+import { NotFoundPage } from "@/pages/NotFound";
 
 function Providers({ children }: { children: ReactNode }): JSX.Element {
   const client = new QueryClient({
@@ -68,6 +69,26 @@ describe("Arabic / RTL support", () => {
     ).toBeTruthy();
     expect(screen.getByLabelText(/البريد الإلكتروني/i)).toBeTruthy();
     expect(localStorage.getItem("gatevision.locale")).toBe("ar");
+  });
+
+  it("translates the operational pages that were added later", async () => {
+    localStorage.setItem("gatevision.locale", "ar");
+    render(
+      <Providers>
+        <NotFoundPage />
+      </Providers>,
+    );
+
+    await waitFor(() => expect(document.documentElement.dir).toBe("rtl"));
+    expect(await screen.findByRole("heading", { name: /هذه النقطة غير موجودة/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /العودة إلى لوحة التحكم/i })).toBeTruthy();
+    expect(TRANSLATIONS.ar["settings.title"]).toBe("الإعدادات");
+    expect(TRANSLATIONS.ar["logs.title"]).toBe("سجلات الدخول");
+    expect(TRANSLATIONS.ar["registry.title.manager"]).toBe("السكان والمركبات");
+    expect(TRANSLATIONS.ar["visitors.title.manager"]).toBe("الزوار والتصاريح");
+    expect(TRANSLATIONS.ar["security.title"]).toBe("القائمة السوداء والتعرف على الوجوه");
+    expect(TRANSLATIONS.ar["scenario.unknown-vehicle.label"]).toContain("لوحة");
+    localStorage.clear();
   });
 
   it("falls back to English and exposes translations outside the provider", () => {

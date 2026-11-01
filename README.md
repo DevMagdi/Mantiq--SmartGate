@@ -46,6 +46,9 @@ operations that work on a single box or in Docker Compose.
 - Roles: **Admin**, **Security Officer**, **Resident** — enforced in the API, the
   WebSocket subscription and the UI.
 - Dark/light UI, responsive layout, skeleton/empty/error states.
+- Full English/Arabic interface: every screen, toast, dialog and demo scenario is
+  translated, and switching the language flips the whole layout to RTL (logical
+  `ps/pe/start/end` utilities, `dir` on `<html>`, locale-aware dates and numbers).
 
 **Platform**
 
@@ -55,7 +58,7 @@ operations that work on a single box or in Docker Compose.
 - Structured logging with request ids, uniform error envelope, health/readiness.
 - 13-table relational model, retention/expiry maintenance job, demo seed.
 - React 18 + Vite + TypeScript + Tailwind + React Query + Recharts.
-- Backend: 65 automated tests. Frontend: 9 integration tests against a live API.
+- Backend: 100+ automated tests. Frontend: unit, i18n/RTL and integration tests against a live API.
 
 ---
 
