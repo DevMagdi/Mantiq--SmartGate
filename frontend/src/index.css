@@ -66,3 +66,17 @@
     @apply bg-ink-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:bg-ink-900/70 dark:text-ink-400;
   }
 }
+
+/* Arabic typography: prefer installed Arabic UI fonts, fall back safely. */
+html[lang="ar"] body {
+  font-family: "Noto Kufi Arabic", "Cairo", "Tajawal", "Segoe UI", "Tahoma", ui-sans-serif,
+    system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+/* Keep plate numbers and metrics LTR even inside an RTL layout. */
+html[dir="rtl"] .force-ltr {
+  direction: ltr;
+  unicode-bidi: embed;
+  text-align: start;
+}

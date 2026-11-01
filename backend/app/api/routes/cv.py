@@ -11,7 +11,13 @@ from app.api.deps import CompoundScope, ManagerUser, SessionDep
 from app.core.events import publish_event
 from app.core.exceptions import BadRequestError
 from app.cv.manager import get_camera_manager
-from app.schemas.access import VisionAnalyzeResponse, VisionPipelineStatus
+from app.schemas.access import (
+    ActuatorStatusResponse,
+    ActuatorTestRequest,
+    GateCommandResult,
+    VisionAnalyzeResponse,
+    VisionPipelineStatus,
+)
 from app.schemas.common import Message
 from app.schemas.security import FaceGalleryInfo
 from app.services.access_service import access_service
@@ -114,6 +120,38 @@ async def analyze_image(
         detection_event_id=recorded.detection_event_id,
         access_log_id=recorded.access_log_id,
         processing_ms=recorded.vision.processing_ms,
+    )
+
+
+@router.get(
+    "/actuators",
+    response_model=ActuatorStatusResponse,
+    summary="Barrier actuator drivers and recent commands",
+)
+async def actuator_status(
+    session: SessionDep, manager: ManagerUser, compound_id: CompoundScope
+) -> ActuatorStatusResponse:
+    """Configuration, health and the last commands of every barrier driver."""
+    return await cv_service.actuator_status(session, compound_id)
+
+
+@router.post(
+    "/actuators/test",
+    response_model=GateCommandResult,
+    summary="Send a test command to a barrier driver",
+)
+async def test_actuator(
+    payload: ActuatorTestRequest, session: SessionDep, manager: ManagerUser
+) -> GateCommandResult:
+    """Send a single command through the configured driver (audited)."""
+    gate = await gate_service.get(session, payload.gate_id)
+    enforce_compound(manager, gate.compound_id)
+    return await cv_service.command_gate(
+        session,
+        gate,
+        payload.action,
+        "Actuator test from dashboard",
+        actor=manager.email,
     )
 
 

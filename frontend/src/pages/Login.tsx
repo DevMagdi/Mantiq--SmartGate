@@ -6,6 +6,7 @@ import { Badge, Button, Input, cn } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { useTheme } from "@/hooks/useTheme";
 import { useToast } from "@/hooks/useToast";
+import { useI18n } from "@/i18n";
 import { apiErrorMessage } from "@/services/api";
 import { DEMO_ACCOUNTS } from "@/utils/constants";
 
@@ -19,6 +20,7 @@ const HIGHLIGHTS = [
 export function LoginPage(): JSX.Element {
   const { login, status } = useAuth();
   const { theme, toggle } = useTheme();
+  const { t, locale, toggleLocale } = useI18n();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -31,8 +33,8 @@ export function LoginPage(): JSX.Element {
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    document.title = "Sign in · GateVision";
-  }, []);
+    document.title = `${t("login.submit")} · GateVision`;
+  }, [t]);
 
   if (status === "authenticated") {
     return <Navigate to={from} replace />;
@@ -57,14 +59,24 @@ export function LoginPage(): JSX.Element {
 
   return (
     <div className="relative min-h-screen bg-ink-50 dark:bg-ink-950">
-      <button
-        type="button"
-        onClick={toggle}
-        className="absolute right-4 top-4 z-20 rounded-lg border border-ink-200 bg-white/80 p-2 text-ink-500 backdrop-blur transition hover:text-ink-800 dark:border-ink-700 dark:bg-ink-900/80 dark:text-ink-300"
-        aria-label="Toggle dark mode"
-      >
-        <Icon name={theme === "dark" ? "sun" : "moon"} className="h-4 w-4" />
-      </button>
+      <div className="absolute end-4 top-4 z-20 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleLocale}
+          className="rounded-lg border border-ink-200 bg-white/80 px-2.5 py-2 text-[11px] font-semibold text-ink-500 backdrop-blur transition hover:text-ink-800 dark:border-ink-700 dark:bg-ink-900/80 dark:text-ink-300"
+          aria-label={locale === "ar" ? "Switch to English" : "التبديل إلى العربية"}
+        >
+          {t("lang.switch")}
+        </button>
+        <button
+          type="button"
+          onClick={toggle}
+          className="rounded-lg border border-ink-200 bg-white/80 p-2 text-ink-500 backdrop-blur transition hover:text-ink-800 dark:border-ink-700 dark:bg-ink-900/80 dark:text-ink-300"
+          aria-label="Toggle dark mode"
+        >
+          <Icon name={theme === "dark" ? "sun" : "moon"} className="h-4 w-4" />
+        </button>
+      </div>
 
       <div className="grid min-h-screen lg:grid-cols-2">
         <section className="relative hidden overflow-hidden bg-ink-950 p-10 text-white lg:flex lg:flex-col lg:justify-between">
@@ -141,15 +153,13 @@ export function LoginPage(): JSX.Element {
             </div>
 
             <h2 className="text-2xl font-bold tracking-tight text-ink-900 dark:text-white">
-              Sign in to your workspace
+              {t("login.title")}
             </h2>
-            <p className="mt-1.5 text-sm text-ink-500 dark:text-ink-400">
-              Use your compound credentials to access the gate control centre.
-            </p>
+            <p className="mt-1.5 text-sm text-ink-500 dark:text-ink-400">{t("login.subtitle")}</p>
 
             <form onSubmit={(event) => void submit(event)} className="mt-7 space-y-4">
               <Input
-                label="Email address"
+                label={t("login.email")}
                 type="email"
                 autoComplete="username"
                 required
@@ -160,7 +170,7 @@ export function LoginPage(): JSX.Element {
               <div>
                 <div className="relative">
                   <Input
-                    label="Password"
+                    label={t("login.password")}
                     type={showPassword ? "text" : "password"}
                     autoComplete="current-password"
                     required
@@ -171,9 +181,9 @@ export function LoginPage(): JSX.Element {
                   <button
                     type="button"
                     onClick={() => setShowPassword((current) => !current)}
-                    className="absolute right-2 top-[30px] rounded-md px-2 py-1 text-[11px] font-semibold text-ink-400 hover:text-ink-700 dark:hover:text-ink-200"
+                    className="absolute end-2 top-[30px] rounded-md px-2 py-1 text-[11px] font-semibold text-ink-400 hover:text-ink-700 dark:hover:text-ink-200"
                   >
-                    {showPassword ? "Hide" : "Show"}
+                    {showPassword ? t("login.hide") : t("login.show")}
                   </button>
                 </div>
               </div>
@@ -186,7 +196,7 @@ export function LoginPage(): JSX.Element {
               ) : null}
 
               <Button type="submit" size="lg" className="w-full" loading={submitting} icon="shield">
-                {submitting ? "Signing in…" : "Sign in"}
+                {submitting ? t("login.signing_in") : t("login.submit")}
               </Button>
             </form>
 
@@ -194,7 +204,7 @@ export function LoginPage(): JSX.Element {
               <div className="flex items-center gap-3">
                 <div className="h-px flex-1 bg-ink-200 dark:bg-ink-800" />
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
-                  Demo workspace
+                  {t("login.demo")}
                 </span>
                 <div className="h-px flex-1 bg-ink-200 dark:bg-ink-800" />
               </div>
@@ -211,7 +221,7 @@ export function LoginPage(): JSX.Element {
                         setError(null);
                       }}
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition",
+                        "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-start transition",
                         active
                           ? "border-brand-300 bg-brand-50/70 dark:border-brand-700 dark:bg-brand-500/10"
                           : "border-ink-200 bg-white hover:border-ink-300 dark:border-ink-800 dark:bg-ink-900 dark:hover:border-ink-700",
@@ -233,13 +243,13 @@ export function LoginPage(): JSX.Element {
                         </p>
                         <p className="truncate text-[10px] text-ink-400">{account.description}</p>
                       </div>
-                      <span className="text-[10px] text-ink-400">Use →</span>
+                      <span className="text-[10px] text-ink-400">{t("login.use")}</span>
                     </button>
                   );
                 })}
               </div>
               <p className="mt-3 text-center text-[10px] text-ink-400">
-                Demo passwords are prefilled for the selected role. Rotate them before production.
+                {t("login.demo_hint")}
               </p>
             </div>
           </div>

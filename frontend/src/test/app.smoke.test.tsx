@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 import App from "@/App";
+import { I18nProvider } from "@/i18n";
 import { AuthProvider } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { ToastProvider } from "@/hooks/useToast";
@@ -32,11 +33,13 @@ function Providers({ children }: { children: ReactNode }): JSX.Element {
   });
   return (
     <ThemeProvider>
-      <QueryClientProvider client={client}>
-        <AuthProvider>
-          <ToastProvider>{children}</ToastProvider>
-        </AuthProvider>
-      </QueryClientProvider>
+      <I18nProvider>
+        <QueryClientProvider client={client}>
+          <AuthProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </I18nProvider>
     </ThemeProvider>
   );
 }

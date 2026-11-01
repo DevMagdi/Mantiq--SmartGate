@@ -196,7 +196,7 @@ export function Field({
       {label ? (
         <label className="field-label" htmlFor={htmlFor}>
           {label}
-          {required ? <span className="ml-1 text-rose-500">*</span> : null}
+          {required ? <span className="ms-1 text-rose-500">*</span> : null}
         </label>
       ) : null}
       {children}
@@ -263,7 +263,7 @@ export function Select({
         id={fieldId}
         required={required}
         aria-invalid={error ? true : undefined}
-        className={cn(FIELD_BASE, "h-10 pr-8", error && "border-rose-400")}
+        className={cn(FIELD_BASE, "h-10 pe-8", error && "border-rose-400")}
         {...props}
       >
         {children}
@@ -285,19 +285,19 @@ export function SearchInput({
 }): JSX.Element {
   return (
     <div className={cn("relative", className)}>
-      <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" />
+      <Icon name="search" className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-400" />
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className={cn(FIELD_BASE, "h-10 pl-9 pr-8")}
+        className={cn(FIELD_BASE, "h-10 ps-9 pe-8")}
         aria-label={placeholder}
       />
       {value ? (
         <button
           type="button"
           onClick={() => onChange("")}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-400 hover:bg-ink-100 dark:hover:bg-ink-800"
+          className="absolute end-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-400 hover:bg-ink-100 dark:hover:bg-ink-800"
           aria-label="Clear search"
         >
           <Icon name="close" className="h-3.5 w-3.5" />
@@ -464,7 +464,7 @@ export function Th({
       scope="col"
       className={cn(
         "table-head whitespace-nowrap border-b border-ink-100 px-4 py-2.5 font-semibold dark:border-ink-800",
-        align === "right" && "text-right",
+        align === "right" && "text-end",
         align === "center" && "text-center",
         className,
       )}
@@ -490,7 +490,7 @@ export function Td({
       colSpan={colSpan}
       className={cn(
         "border-b border-ink-50 px-4 py-3 align-middle text-ink-600 last:border-0 dark:border-ink-800/60 dark:text-ink-300",
-        align === "right" && "text-right",
+        align === "right" && "text-end",
         align === "center" && "text-center",
         className,
       )}

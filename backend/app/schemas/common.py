@@ -61,6 +61,12 @@ class HealthResponse(BaseModel):
     redis: bool
     cv_mode: str
     timestamp: datetime
+    checks: dict[str, Any] = Field(
+        default_factory=dict, description="Per-dependency detail (DB, cache, vision, barrier)"
+    )
+    warnings: list[str] = Field(
+        default_factory=list, description="Non-fatal problems worth surfacing to operators"
+    )
 
 
 class SortParams(BaseModel):

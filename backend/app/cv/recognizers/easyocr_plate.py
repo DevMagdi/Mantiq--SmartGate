@@ -8,7 +8,16 @@ from app.core.config import settings
 from app.core.exceptions import VisionEngineError
 from app.core.logging import get_logger
 from app.cv.types import BoundingBox, Image, PlateReading
+from app.cv.plate_rules import ARABIC_TO_LATIN
 from app.cv.utils import clean_plate_text, enhance_plate_crop, otsu_variants, valid_plate_candidate
+
+# Only characters that can legally appear on a plate are requested from the
+# recogniser; this removes most of the punctuation/emoji noise on night frames.
+PLATE_ALLOWLIST = (
+    "0123456789"
+    + "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    + "".join(ARABIC_TO_LATIN.keys())
+)
 
 logger = get_logger(__name__)
 
@@ -75,7 +84,7 @@ class EasyOCRPlateReader:
         best: PlateReading | None = None
         for variant in candidates:
             try:
-                results = self._reader.readtext(variant, detail=1, paragraph=False)
+                results = self._read_variant(variant)
             except Exception as exc:  # pragma: no cover - engine failure
                 logger.debug("EasyOCR pass failed: %s", exc)
                 continue
@@ -103,6 +112,23 @@ class EasyOCRPlateReader:
                     raw_text=" ".join(str(r[1]) for r in results),
                 )
         return best
+
+    def _read_variant(self, variant: Image) -> list[tuple[Any, str, float]]:
+        """Run one OCR pass, constraining the alphabet when supported."""
+        assert self._reader is not None
+        if settings.CV_OCR_ALLOWLIST:
+            try:
+                return list(
+                    self._reader.readtext(
+                        variant,
+                        detail=1,
+                        paragraph=False,
+                        allowlist=PLATE_ALLOWLIST,
+                    )
+                )
+            except (TypeError, ValueError):  # pragma: no cover - older easyocr
+                logger.debug("EasyOCR build does not support allowlist; using free decode")
+        return list(self._reader.readtext(variant, detail=1, paragraph=False))
 
     def warmup(self) -> None:
         import numpy as np

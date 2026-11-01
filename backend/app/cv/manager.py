@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -15,12 +16,14 @@ from app.core.events import publish_event
 from app.core.logging import get_logger
 from app.cv.engine import VisionEngine, get_vision_engine
 from app.cv.gallery import FaceGallery, GalleryEntry, MutableGallery
+from app.cv.types import VisionOptions
 from app.cv.worker import CameraConfig, CameraWorker, ResultEnvelope, StatusUpdate
 from app.db.session import session_scope
-from app.models.compound import Camera, Gate
+from app.models.compound import Camera, Compound, Gate
 from app.models.enums import CameraStatus, ResidentStatus
 from app.models.people import Resident
 from app.models.security import FaceEmbedding
+from app.services.compound_policy import CompoundPolicy
 
 logger = get_logger(__name__)
 
@@ -73,6 +76,7 @@ class CameraManager:
         self._status_queue: asyncio.Queue[StatusUpdate] = asyncio.Queue(maxsize=500)
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
+        self._policies: dict[uuid.UUID, CompoundPolicy] = {}
 
     # --------------------------------------------------------------- lifecycle
     async def start(self) -> None:
@@ -118,6 +122,13 @@ class CameraManager:
                 .where(Camera.is_active.is_(True), Gate.is_active.is_(True))
             )
             rows = (await session.execute(stmt)).unique().all()
+            compounds = list(
+                (await session.execute(select(Compound))).scalars().unique().all()
+            )
+            self._policies = {
+                compound.id: CompoundPolicy.from_settings(compound.settings)
+                for compound in compounds
+            }
             configs = [
                 CameraConfig(
                     camera_id=camera.id,
@@ -129,6 +140,9 @@ class CameraManager:
                     source_url=camera.source_url,
                     fps_limit=min(camera.fps_limit or 5.0, settings.CV_MAX_FPS),
                     position=camera.position,
+                    vision=VisionOptions.from_policy(
+                        self._policies.get(gate.compound_id, CompoundPolicy())
+                    ),
                 )
                 for camera, gate in rows
             ]
@@ -187,6 +201,43 @@ class CameraManager:
     async def refresh_galleries(self) -> None:
         """Reload every gallery (call after enrollment changes)."""
         await self._load_galleries()
+
+    async def refresh_policies(self) -> None:
+        """Re-read compound policies after a settings change.
+
+        Restarting the affected workers is the safest way to apply new
+        thresholds: they are passed at construction time and captured by the
+        camera thread.
+        """
+        await self._sync_policies()
+        for config in list(self._configs.values()):
+            policy = self._policies.get(config.compound_id, CompoundPolicy())
+            updated = replace(
+                config, vision=VisionOptions.from_policy(policy)
+            )
+            if updated.vision == config.vision:
+                continue
+            worker = self._workers.pop(config.camera_id, None)
+            if worker is not None:
+                worker.stop()
+                await asyncio.to_thread(worker.join, 3.0)
+            self._configs.pop(config.camera_id, None)
+            logger.info("Restarting camera %s with updated vision policy", config.name)
+            self._start_worker(updated)
+
+    async def _sync_policies(self) -> None:
+        async with session_scope() as session:
+            compounds = list(
+                (await session.execute(select(Compound))).scalars().unique().all()
+            )
+        self._policies = {
+            compound.id: CompoundPolicy.from_settings(compound.settings)
+            for compound in compounds
+        }
+
+    def policy_for(self, compound_id: uuid.UUID) -> CompoundPolicy:
+        """Return the cached policy for a compound (defaults when unknown)."""
+        return self._policies.get(compound_id, CompoundPolicy())
 
     # ------------------------------------------------------------------ queues
     def _enqueue_result(self, envelope: ResultEnvelope) -> None:

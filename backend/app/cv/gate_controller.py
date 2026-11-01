@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +33,18 @@ from app.models.enums import (
 from app.models.people import Permit, Resident, Visitor
 from app.models.security import BlacklistEntry
 from app.models.vehicle import Vehicle
+from app.core.metrics import record_barrier_command
+from app.cv.actuators import (
+    BARRIER_ACTIONS,
+    ActuatorRegistry,
+    ActuatorResult,
+    SimulatedActuator,
+    WebhookActuator,
+    actuator_registry,
+    command_journal,
+)
 from app.cv.utils import normalize_plate, plate_variants
+from app.services.compound_policy import AccessPolicy, CompoundPolicy
 
 logger = get_logger(__name__)
 
@@ -67,6 +77,8 @@ class ReasonCode:
     VISITOR_EXIT = "visitor_exit"
     REGISTERED_EXIT = "registered_exit"
     MANUAL_OVERRIDE = "manual_override"
+    FACE_REQUIRED_MISSING = "face_required_missing"
+    BLACKLIST_EXIT_ALLOWED = "blacklist_exit_allowed"
 
 
 REASON_MESSAGES: dict[str, str] = {
@@ -94,7 +106,14 @@ REASON_MESSAGES: dict[str, str] = {
     ReasonCode.VISITOR_EXIT: "Visitor checking out of the compound",
     ReasonCode.REGISTERED_EXIT: "Vehicle exiting the compound",
     ReasonCode.MANUAL_OVERRIDE: "Decision overridden by a security officer",
+    ReasonCode.FACE_REQUIRED_MISSING: "Compound policy requires a recognised driver face",
+    ReasonCode.BLACKLIST_EXIT_ALLOWED: "Blacklisted entity allowed to leave the compound",
 }
+
+
+def describe_reason(reason_code: str) -> str:
+    """Human sentence for a reason code (used by the dashboard explainer)."""
+    return REASON_MESSAGES.get(reason_code, reason_code.replace("_", " ").title())
 
 
 @dataclass(slots=True)
@@ -164,7 +183,8 @@ class AccessDecisionEngine:
     ) -> DecisionResult:
         gate = context.gate
         now = as_utc(context.occurred_at)
-        compound_settings = await self._compound_settings(session, gate.compound_id)
+        policy = await self.policy(session, gate.compound_id)
+        access: AccessPolicy = policy.access
         normalized_plate = normalize_plate(context.plate_text)
         lookup_keys = plate_variants(context.plate_text)
 
@@ -188,11 +208,11 @@ class AccessDecisionEngine:
             open_barrier: bool | None = None,
             details: dict[str, Any] | None = None,
         ) -> DecisionResult:
-            allow_auto_open = bool(compound_settings.get("auto_open_barrier", True))
+            allow_auto_open = access.auto_open_barrier
             return DecisionResult(
                 decision=decision,
                 reason_code=reason_code,
-                reason=REASON_MESSAGES.get(reason_code, reason_code.replace("_", " ").title()),
+                reason=describe_reason(reason_code),
                 method=method,
                 direction=direction,
                 requires_review=decision == AccessDecision.REVIEW,
@@ -224,6 +244,18 @@ class AccessDecisionEngine:
                 BlacklistEntryType.FACE: ReasonCode.BLACKLIST_FACE,
                 BlacklistEntryType.PERSON: ReasonCode.BLACKLIST_PERSON,
             }[blacklist_hit.entry_type]
+            if direction == AccessDirection.EXIT and access.allow_blacklist_exit:
+                return result(
+                    AccessDecision.ALLOW,
+                    ReasonCode.BLACKLIST_EXIT_ALLOWED,
+                    AccessMethod.COMBINED if context.face_resident_id else AccessMethod.PLATE,
+                    details={
+                        "blacklist_entry_id": str(blacklist_hit.id),
+                        "blacklist_reason": blacklist_hit.reason.value
+                        if hasattr(blacklist_hit.reason, "value")
+                        else str(blacklist_hit.reason),
+                    },
+                )
             return result(
                 AccessDecision.DENY,
                 reason_code,
@@ -284,6 +316,15 @@ class AccessDecisionEngine:
                             "recognised_resident_id": str(face_resident.id),
                         },
                     )
+                if access.require_face_for_vehicle and face_resident is None:
+                    return result(
+                        AccessDecision.REVIEW,
+                        ReasonCode.FACE_REQUIRED_MISSING,
+                        AccessMethod.PLATE,
+                        resident=owner,
+                        open_barrier=False,
+                        details={"policy": "require_face_for_vehicle"},
+                    )
                 method = (
                     AccessMethod.COMBINED
                     if face_resident is not None
@@ -330,7 +371,7 @@ class AccessDecisionEngine:
             )
 
         # -------------------------------------------------------- 5. face recognition
-        allow_face_entry = bool(compound_settings.get("allow_face_only_entry", True))
+        allow_face_entry = access.allow_face_only_entry
         if face_resident is not None:
             if face_resident.status != ResidentStatus.ACTIVE:
                 return result(
@@ -359,35 +400,37 @@ class AccessDecisionEngine:
                 )
 
         # ------------------------------------------------------------- 6. unknown
+        # The compound decides whether an unregistered vehicle is silently
+        # logged ("unknown") or queued for a human ("review") / refused.
+        fallback = access.unknown_vehicle_decision
         if normalized_plate:
             if vehicle is not None:
                 # Visitor vehicle registered without a permit.
                 return result(
-                    AccessDecision.UNKNOWN,
+                    fallback,
                     ReasonCode.UNKNOWN_VISITOR_NO_PERMIT,
                     AccessMethod.PLATE,
                     open_barrier=False,
                 )
             return result(
-                AccessDecision.UNKNOWN,
+                fallback,
                 ReasonCode.UNKNOWN_PLATE,
                 AccessMethod.PLATE,
                 open_barrier=False,
-                details={"plate": context.plate_text},
+                details={"plate": context.plate_text, "policy": "unknown_vehicle_decision"},
             )
         return result(
-            AccessDecision.UNKNOWN,
+            fallback,
             ReasonCode.NO_SIGNAL,
             AccessMethod.PLATE,
             open_barrier=False,
         )
 
     # ------------------------------------------------------------------ queries
-    async def _compound_settings(
-        self, session: AsyncSession, compound_id: uuid.UUID
-    ) -> dict[str, Any]:
+    async def policy(self, session: AsyncSession, compound_id: uuid.UUID) -> CompoundPolicy:
+        """Load the validated operational policy for a compound."""
         compound = await session.get(Compound, compound_id)
-        return dict(compound.settings or {}) if compound else {}
+        return CompoundPolicy.from_settings(compound.settings if compound else None)
 
     async def _find_vehicle(
         self, session: AsyncSession, compound_id: uuid.UUID, lookup_keys: set[str]
@@ -521,67 +564,35 @@ class AccessDecisionEngine:
         return (await session.execute(stmt)).scalar_one_or_none()
 
 
-class SimulatedGateActuator:
-    """Default actuator: logs the command (relay hardware integration point)."""
-
-    async def open(self, gate_code: str, reason: str) -> bool:
-        logger.info("Barrier OPEN command accepted for gate %s (%s)", gate_code, reason)
-        return True
-
-    async def close(self, gate_code: str, reason: str) -> bool:
-        logger.info("Barrier CLOSE command accepted for gate %s (%s)", gate_code, reason)
-        return True
-
-    async def hold(self, gate_code: str, reason: str) -> bool:
-        logger.info("Barrier HOLD command accepted for gate %s (%s)", gate_code, reason)
-        return True
-
-
-class WebhookGateActuator:
-    """Sends signed barrier commands to a hardware controller webhook."""
-
-    def __init__(self, url: str, timeout: float = 3.0) -> None:
-        self.url = url
-        self.timeout = timeout
-
-    async def _send(self, gate_code: str, action: str, reason: str) -> bool:
-        payload = {"gate": gate_code, "action": action, "reason": reason}
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(self.url, json=payload)
-            if response.status_code >= 400:
-                logger.warning(
-                    "Gate webhook rejected command (%s): %s", response.status_code, response.text[:200]
-                )
-                return False
-            return True
-        except httpx.HTTPError as exc:
-            logger.error("Gate webhook error: %s", exc)
-            return False
-
-    async def open(self, gate_code: str, reason: str) -> bool:
-        return await self._send(gate_code, "open", reason)
-
-    async def close(self, gate_code: str, reason: str) -> bool:
-        return await self._send(gate_code, "close", reason)
-
-    async def hold(self, gate_code: str, reason: str) -> bool:
-        return await self._send(gate_code, "hold", reason)
+# Backwards-compatible aliases: the actuators now live in ``app.cv.actuators``.
+SimulatedGateActuator = SimulatedActuator
+WebhookGateActuator = WebhookActuator
 
 
 @dataclass(slots=True)
 class GateCommand:
+    """Result of one barrier command (also journaled and broadcast)."""
+
     gate_id: uuid.UUID
     action: str
     accepted: bool
     detail: str
+    driver: str = "simulator"
+    latency_ms: int = 0
+    command_id: str | None = None
 
 
 class GateController:
-    """Executes barrier commands and broadcasts them to the dashboard."""
+    """Executes barrier commands through the compound's configured actuator.
 
-    def __init__(self) -> None:
-        self._simulated = SimulatedGateActuator()
+    Commands are signed/sent by the driver selected in the compound barrier
+    policy (simulator, webhook, mqtt or gpio), journaled for the dashboard and
+    broadcast on the WebSocket bus so every console sees the same event.
+    """
+
+    def __init__(self, registry: ActuatorRegistry | None = None) -> None:
+        self.registry = registry or actuator_registry
+        self.journal = command_journal
 
     async def execute(
         self,
@@ -592,18 +603,45 @@ class GateController:
         *,
         actor: str = "system",
     ) -> GateCommand:
-        if action not in {"open", "close", "hold"}:
+        if action not in BARRIER_ACTIONS:
+            self.journal.record(
+                gate_code=gate.code,
+                action=action,
+                result=ActuatorResult(
+                    accepted=False,
+                    driver="none",
+                    detail=f"Unsupported action: {action}",
+                    error="unsupported_action",
+                ),
+                actor=actor,
+                reason=reason,
+                gate_id=gate.id,
+                compound_id=gate.compound_id,
+            )
             return GateCommand(gate.id, action, False, f"Unsupported action: {action}")
-        actuator: SimulatedGateActuator | WebhookGateActuator = self._simulated
-        webhook_url = None
-        if compound is not None:
-            webhook_url = (compound.settings or {}).get("gate_webhook_url")
-        if isinstance(webhook_url, str) and webhook_url.startswith(("http://", "https://")):
-            actuator = WebhookGateActuator(webhook_url)
-        accepted = await getattr(actuator, action)(gate.code, reason)
-        detail = (
-            f"Barrier {action} command {'accepted' if accepted else 'failed'} via "
-            f"{'webhook' if isinstance(actuator, WebhookGateActuator) else 'simulator'}"
+
+        policy = CompoundPolicy.from_settings(compound.settings if compound else None)
+        try:
+            actuator = await self.registry.for_policy(gate.compound_id, policy.barrier)
+            result = await actuator.send(action, gate.code, reason)
+        except Exception as exc:  # pragma: no cover - defensive: never block the log
+            logger.exception("Barrier actuator crashed for gate %s", gate.code)
+            result = ActuatorResult(
+                accepted=False,
+                driver=policy.barrier.driver,
+                detail=f"Actuator error: {type(exc).__name__}: {exc}",
+                error=str(exc),
+            )
+
+        record_barrier_command(result.driver, action, result.accepted)
+        record = self.journal.record(
+            gate_code=gate.code,
+            action=action,
+            result=result,
+            actor=actor,
+            reason=reason,
+            gate_id=gate.id,
+            compound_id=gate.compound_id,
         )
         await publish_event(
             "gate.command",
@@ -612,13 +650,46 @@ class GateController:
                 "gate_code": gate.code,
                 "compound_id": str(gate.compound_id),
                 "action": action,
-                "accepted": accepted,
+                "accepted": result.accepted,
                 "reason": reason,
                 "actor": actor,
+                "driver": result.driver,
+                "latency_ms": result.latency_ms,
+                "attempts": result.attempts,
+                "detail": result.detail,
+                "command_id": record.id,
             },
         )
-        logger.info("Gate %s command=%s accepted=%s actor=%s", gate.code, action, accepted, actor)
-        return GateCommand(gate.id, action, accepted, detail)
+        log = logger.info if result.accepted else logger.warning
+        log(
+            "Barrier command gate=%s action=%s driver=%s accepted=%s latency=%dms actor=%s detail=%s",
+            gate.code,
+            action,
+            result.driver,
+            result.accepted,
+            result.latency_ms,
+            actor,
+            result.detail,
+        )
+        return GateCommand(
+            gate.id,
+            action,
+            result.accepted,
+            result.detail,
+            driver=result.driver,
+            latency_ms=result.latency_ms,
+            command_id=record.id,
+        )
+
+    def status(self, compound_id: uuid.UUID) -> dict[str, Any]:
+        """Driver health plus recent commands for one compound."""
+        return {
+            "actuator": self.registry.status(compound_id),
+            "journal": self.journal.summary(),
+            "recent_commands": [
+                item.as_dict() for item in self.journal.recent(20, compound_id=str(compound_id))
+            ],
+        }
 
 
 _gate_controller: GateController | None = None
@@ -642,6 +713,8 @@ __all__ = [
     "REASON_MESSAGES",
     "SimulatedGateActuator",
     "WebhookGateActuator",
+    "actuator_registry",
+    "command_journal",
     "get_gate_controller",
     "resolve_direction",
 ]

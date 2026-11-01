@@ -33,6 +33,7 @@ from app.schemas.analytics import (
     HourlyHeatmapCell,
     MethodBreakdown,
     OccupancySnapshot,
+    ReasonBreakdown,
     OverviewStats,
     PeakHourPoint,
     TrendPoint,
@@ -90,6 +91,8 @@ class AnalyticsService:
                 AccessLog.plate_normalized,
                 AccessLog.access_method,
                 AccessLog.face_similarity,
+                AccessLog.reason_code,
+                AccessLog.gate_opened,
             )
             .where(AccessLog.occurred_at >= range_start)
             .where(AccessLog.occurred_at <= now)
@@ -206,6 +209,27 @@ class AnalyticsService:
             avg_processing_ms=round(sum(processing) / len(processing), 1) if processing else None,
             entries_change_pct=entries_change,
         )
+
+        # ------------------------------------------------------- explainability
+        reason_counts: Counter[str] = Counter()
+        reason_decision: dict[str, str] = {}
+        barrier_failures = 0
+        for row in rows:
+            if row.reason_code:
+                reason_counts[row.reason_code] += 1
+                reason_decision.setdefault(row.reason_code, row.decision.value)
+            if row.decision == AccessDecision.ALLOW and not row.gate_opened:
+                barrier_failures += 1
+        total_reasons = sum(reason_counts.values())
+        reason_breakdown = [
+            ReasonBreakdown(
+                reason_code=code,
+                decision=reason_decision.get(code, "unknown"),
+                count=count,
+                percentage=round(count / total_reasons, 4) if total_reasons else 0.0,
+            )
+            for code, count in reason_counts.most_common(8)
+        ]
 
         # -------------------------------------------------------- time buckets
         hour_entries: Counter[int] = Counter()
@@ -336,6 +360,8 @@ class AnalyticsService:
             trend=trend_points,
             decision_breakdown=decision_breakdown,
             method_breakdown=method_breakdown,
+            reason_breakdown=reason_breakdown,
+            barrier_failures=barrier_failures,
             gate_performance=gate_performance,
             heatmap=heatmap,
             recent_access=[AccessLogRead.model_validate(item) for item in recent_access],

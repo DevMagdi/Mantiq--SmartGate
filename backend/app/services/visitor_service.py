@@ -328,7 +328,6 @@ class PermitService:
 
     async def refresh_statuses(self, session: AsyncSession) -> int:
         """Move permits between pending/active/expired based on the clock."""
-        now = _utcnow()
         permits = list(
             (
                 await session.execute(

@@ -19,7 +19,7 @@ from app.cv.recognizers.easyocr_plate import EasyOCRPlateReader
 from app.cv.recognizers.mock import MockPlateReader
 from app.cv.recognizers.paddle_plate import PaddleOCRPlateReader
 from app.cv.snapshots import SnapshotStore
-from app.cv.types import Image, RawFrame, VisionResult
+from app.cv.types import Image, RawFrame, VisionOptions, VisionResult
 from app.cv.utils import image_embedding
 
 logger = get_logger(__name__)
@@ -57,7 +57,6 @@ class VisionEngine:
         with self._build_lock:
             if self._pipeline is not None:
                 return self._pipeline
-            cfg = self.config
             if self.mode == "mock":
                 self._warnings.append(
                     "Mock vision engine active: detections are simulated for the offline demo "
@@ -171,6 +170,7 @@ class VisionEngine:
         *,
         annotate: bool = True,
         include_face: bool = True,
+        options: VisionOptions | None = None,
     ) -> VisionResult:
         """Run the pipeline under the global inference lock."""
         if self.mode == "real" and self._warmed and not self._ready:
@@ -180,7 +180,11 @@ class VisionEngine:
         pipeline = self._build_pipeline()
         with self._inference_lock:
             return pipeline.process(
-                frame, gallery=gallery, annotate=annotate, include_face=include_face
+                frame,
+                gallery=gallery,
+                annotate=annotate,
+                include_face=include_face,
+                options=options,
             )
 
     def analyze_image(
@@ -188,6 +192,7 @@ class VisionEngine:
         image: Image,
         gallery: FaceGallery | None = None,
         meta: dict[str, object] | None = None,
+        options: VisionOptions | None = None,
     ) -> VisionResult:
         """Analyse an uploaded image (used by the manual verification endpoint)."""
         import datetime as dt
@@ -200,7 +205,32 @@ class VisionEngine:
             captured_at=dt.datetime.now(dt.UTC),
             meta=dict(meta or {}),
         )
-        return self.process(frame, gallery=gallery)
+        return self.process(frame, gallery=gallery, options=options)
+
+    def face_boxes(self, image: Image) -> list[Any]:
+        """Detect every face in an image (used by enrollment quality checks)."""
+        if self.mode == "mock":
+            height, width = image.shape[:2]
+            side = int(min(height, width) * 0.45)
+            cx, cy = width // 2, height // 2
+            from app.cv.types import BoundingBox
+
+            return [
+                BoundingBox(
+                    max(0, cx - side // 2),
+                    max(0, cy - side // 2),
+                    min(width, cx + side // 2),
+                    min(height, cy + side // 2),
+                )
+            ]
+        pipeline = self._build_pipeline()
+        detector = pipeline.face_detector
+        detect = getattr(detector, "detect", None)
+        if not callable(detect):
+            return []
+        with self._inference_lock:
+            faces = detect(image)
+        return [face.bbox for face in faces]
 
     def embedding_for_enrollment(self, image: Image) -> tuple[float, ...] | None:
         """Extract an embedding for face enrollment using the active engine."""
@@ -231,6 +261,9 @@ class VisionEngine:
             "warnings": list(self._warnings),
             "face_gallery_size": 0,
             "similarity_threshold": self.config.CV_FACE_SIMILARITY_THRESHOLD,
+            "plate_confidence_threshold": self.config.CV_PLATE_CONFIDENCE_THRESHOLD,
+            "ocr_min_confidence": self.config.CV_OCR_MIN_CONFIDENCE,
+            "lazy_imports": True,
         }
 
 

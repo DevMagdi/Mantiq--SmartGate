@@ -444,6 +444,13 @@ export interface MethodBreakdown {
   count: number;
 }
 
+export interface ReasonBreakdown {
+  reason_code: string;
+  decision: AccessDecision;
+  count: number;
+  percentage: number;
+}
+
 export interface GatePerformance {
   gate_id: string;
   gate_name: string;
@@ -473,6 +480,8 @@ export interface DashboardData {
   decision_breakdown: DecisionBreakdown[];
   method_breakdown: MethodBreakdown[];
   gate_performance: GatePerformance[];
+  reason_breakdown: ReasonBreakdown[];
+  barrier_failures: number;
   heatmap: HeatmapCell[];
   recent_access: AccessLog[];
   recent_detections: DetectionEvent[];
@@ -496,6 +505,61 @@ export interface VisionPipelineStatus {
   warnings: string[];
   face_gallery_size: number;
   similarity_threshold: number;
+}
+
+export type BarrierDriver = "simulator" | "webhook" | "mqtt" | "gpio";
+
+export interface ActuatorCommand {
+  id: string;
+  occurred_at: string;
+  gate_code: string;
+  gate_id: string | null;
+  compound_id: string | null;
+  action: string;
+  driver: string;
+  accepted: boolean;
+  latency_ms: number;
+  attempts: number;
+  detail: string;
+  actor: string;
+  reason: string;
+  error: string | null;
+  external_status: number | null;
+  extra: Record<string, unknown>;
+}
+
+export interface ActuatorStatusEntry {
+  compound_id: string | null;
+  compound_name: string | null;
+  configured: boolean;
+  driver: BarrierDriver | string;
+  name: string | null;
+  config: {
+    driver?: string;
+    webhook?: { url?: string | null; signed?: boolean } | null;
+    mqtt?: { host?: string; port?: number; topic?: string; simulated?: boolean } | null;
+    gpio?: { open_pin?: number; close_pin?: number; simulated?: boolean } | null;
+    [key: string]: unknown;
+  };
+  health: Record<string, unknown>;
+  warnings: string[];
+  journal: Record<string, unknown>;
+  recent_commands: ActuatorCommand[];
+}
+
+export interface ActuatorStatusResponse {
+  compounds: ActuatorStatusEntry[];
+  journal: Record<string, unknown>;
+}
+
+export interface ActuatorTestResult {
+  gate_id: string;
+  action: string;
+  accepted: boolean;
+  detail: string;
+  driver: string;
+  latency_ms: number;
+  command_id: string | null;
 }
 
 export interface VisionAnalyzeResult {

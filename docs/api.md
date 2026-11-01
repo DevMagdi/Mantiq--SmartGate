@@ -98,8 +98,20 @@ pinned to their own compound).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness + version |
-| `GET` | `/health/ready` | Database and Redis readiness |
+| Method | Path | Description |
+| --- | --- | --- | --- |
+| `GET` | `/health` | Liveness (`status`, `version`, `environment`) |
+| `GET` | `/health/live` | Liveness alias for load balancers |
+| `GET` | `/health/ready` | Readiness: `database`, `redis`, plus `checks` (vision engine, barrier driver, maintenance) and `warnings`. `503` only when the DB/Redis are down |
+| `GET` | `/metrics` | Prometheus exposition (`text/plain`), outside `/api/v1` and the OpenAPI schema |
+
+Metric names: `gatevision_http_requests_total`,
+`gatevision_http_request_duration_seconds`, `gatevision_access_decisions_total`,
+`gatevision_barrier_commands_total`, `gatevision_vision_results_total`,
+`gatevision_face_enrollments_total`, `gatevision_cv_engine_ready`,
+`gatevision_face_gallery_entries`, `gatevision_barrier_driver`,
+`gatevision_maintenance_runs_total`, `gatevision_maintenance_purged_total`,
+`gatevision_maintenance_last_success_timestamp_seconds`, `gatevision_app_info`.
 
 ### 3.2 Compounds and units
 
@@ -113,11 +125,52 @@ pinned to their own compound).
 | `GET` | `/compounds/{id}/units` | manager | Filters: `status`, `unit_type`, `search` |
 | `POST` | `/compounds/{id}/units` | manager | `building`, `unit_number`, `unit_type`, `bedrooms` |
 | `GET/PATCH/DELETE` | `/compounds/{id}/units/{unit_id}` | manager | Unit label is derived |
+| `GET` | `/compounds/{id}/settings` | manager | `raw`, `effective` and `defaults` (secrets masked) |
+| `PATCH` | `/compounds/{id}/settings` | admin | Deep-merges `vision`, `access`, `barrier` |
 
-`compound.settings` is a JSON document understood by the decision engine:
+`compound.settings` holds a validated policy document. Everything is optional;
+missing keys fall back to the defaults (which come from the `CV_*` / `BARRIER_*`
+environment variables):
 
 ```json
-{"auto_open_barrier": true, "allow_face_only_entry": true, "gate_webhook_url": null}
+{
+  "vision": {
+    "plate_confidence_threshold": 0.35,
+    "ocr_min_confidence": 0.45,
+    "face_similarity_threshold": 0.45,
+    "face_min_quality": 55,
+    "max_embeddings_per_resident": 3
+  },
+  "access": {
+    "auto_open_barrier": true,
+    "allow_face_only_entry": true,
+    "unknown_vehicle_decision": "unknown",
+    "require_face_for_vehicle": false,
+    "allow_blacklist_exit": false
+  },
+  "barrier": {
+    "driver": "webhook",
+    "webhook": {"url": "https://controller.lan/api/barrier", "secret": "…",
+                "timeout_seconds": 3, "retries": 2, "verify_tls": true},
+    "mqtt": {"host": "mqtt.lan", "port": 1883, "topic": "gatevision/{gate}/command",
+             "qos": 1, "tls": false, "simulate": true},
+    "gpio": {"open_pin": 17, "close_pin": 27, "hold_pin": 22, "active_high": true,
+             "pulse_seconds": 0.6, "simulate": true}
+  }
+}
+```
+
+Rules enforced server-side: thresholds are clamped to safe ranges,
+`unknown_vehicle_decision` can never be `allow`, an unknown barrier driver falls
+back to `simulator`, and the legacy flat key `gate_webhook_url` still selects the
+webhook driver. Secrets are returned as `********`; sending `********` back is a
+no-op, so a masked document can be PATCHed safely.
+
+```bash
+curl -X PATCH localhost:8000/api/v1/compounds/$ID/settings \
+  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"access": {"unknown_vehicle_decision": "review"},
+       "barrier": {"driver": "mqtt", "mqtt": {"host": "mqtt.lan", "simulate": false}}}'
 ```
 
 ### 3.3 Gates and cameras
@@ -127,7 +180,7 @@ pinned to their own compound).
 | `GET` | `/gates` | any scoped | Includes nested camera summaries |
 | `POST` | `/gates` | manager | `code` unique per compound |
 | `GET/PATCH/DELETE` | `/gates/{id}` | manager (delete: admin) | |
-| `POST` | `/gates/{id}/command` | manager | `{action: open\|close\|hold, reason}` → actuator |
+| `POST` | `/gates/{id}/command` | manager | `{action: open\|close\|hold, reason}` → actuator; returns `driver`, `latency_ms`, `command_id` |
 | `GET` | `/cameras` | manager | Includes `status`, `last_frame_at`, `last_error` |
 | `POST` | `/cameras` | manager | `source_type`: `rtsp`/`usb`/`file`/`demo` |
 | `GET/PATCH/DELETE` | `/cameras/{id}` | manager | |
@@ -203,7 +256,16 @@ visitor vehicle so ANPR can match it at the barrier.
 | `GET` | `/faces/gallery` | any scoped | `total_embeddings`, `active_embeddings`, `enrolled_residents` |
 | `POST` | `/faces/enroll` | manager or self | Multipart `resident_id`, `file`, `overwrite` |
 | `POST` | `/faces/{id}/deactivate` | manager | Keeps the row for audit |
+| `POST` | `/faces/quality-check` | manager or self | Multipart `file` (+ optional `resident_id`) → quality report, nothing stored |
+| `POST` | `/faces/prune` | manager | `{compound_id, max_per_resident?, dry_run?}` keeps the best embedding per resident |
 | `DELETE` | `/faces/{id}` | manager | Hard delete (GDPR erasure) |
+
+`/faces/enroll` rejects photos that fail the quality gates with
+`400 enrollment_rejected` and the full report in `error.details`
+(`passed`, `score`, `face_count`, `face_ratio`, `blur`, `brightness`,
+`duplicate_similarity`, `issues[]` with `code`/`message`/`severity`/`hint`).
+`embedding_limit_reached` is returned when the resident already has
+`vision.max_embeddings_per_resident` active embeddings (use `overwrite=true`).
 
 Blacklist payload:
 
@@ -265,7 +327,13 @@ Override example:
 
 `/analytics/dashboard` returns `overview`, `trend`, `decision_breakdown`,
 `method_breakdown`, `peak_hours` (24 buckets, sparse if no traffic),
-`gate_performance`, `recent_access`, `recent_detections` and a 7×24 `heatmap`.
+`gate_performance`, `recent_access`, `recent_detections`, a 7×24 `heatmap`, plus
+two explainability signals:
+
+* `reason_breakdown[]` — the top decision reasons in the range
+  (`reason_code`, `decision`, `count`, `percentage`);
+* `barrier_failures` — allowed decisions whose barrier did not open (hardware
+  problem indicator).
 
 ### 3.10 Computer vision
 
@@ -279,6 +347,8 @@ Override example:
 | `GET` | `/cv/camera-health` | any | Counts by camera status |
 | `POST` | `/cv/analyze` | manager | Multipart `gate_id`, `file`, optional `demo_scenario` |
 | `POST` | `/cv/analysis/{log_id}/confirm` | manager | Acknowledge a review decision |
+| `GET` | `/cv/actuators` | manager | Barrier driver config (masked), health, warnings and the last 10 commands per compound |
+| `POST` | `/cv/actuators/test` | manager | `{gate_id, action}` — sends one command through the real driver (audited) |
 
 `/cv/analyze` runs the full pipeline on an uploaded frame and **persists** the
 detection, the access log and the barrier command, exactly like a live camera frame.

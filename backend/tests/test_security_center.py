@@ -8,11 +8,16 @@ from starlette.testclient import TestClient
 
 
 def _png_bytes() -> bytes:
+    """Textured synthetic portrait so the enrollment quality gates pass."""
     import cv2
     import numpy as np
 
-    image = np.full((320, 320, 3), 128, dtype=np.uint8)
-    cv2.circle(image, (160, 160), 90, (200, 180, 160), -1)
+    rng = np.random.default_rng(11)
+    image = rng.integers(60, 200, size=(480, 480, 3), dtype=np.uint8)
+    cv2.ellipse(image, (240, 240), (95, 120), 0, 0, 360, (185, 175, 165), -1)
+    cv2.circle(image, (215, 225), 7, (25, 25, 25), -1)
+    cv2.circle(image, (265, 225), 7, (25, 25, 25), -1)
+    cv2.ellipse(image, (240, 285), (30, 12), 0, 0, 180, (60, 50, 50), 3)
     ok, buffer = cv2.imencode(".png", image)
     assert ok
     return buffer.tobytes()

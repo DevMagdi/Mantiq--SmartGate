@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,12 +14,13 @@ from app.core.config import settings
 from app.core.events import publish_event
 from app.core.exceptions import BadRequestError
 from app.core.logging import get_logger
+from app.core.metrics import record_decision, record_vision_result
 from app.cv.engine import VisionEngine, get_vision_engine
 from app.cv.gate_controller import AccessDecisionEngine, DecisionContext, DecisionResult, get_gate_controller
 from app.cv.snapshots import SnapshotStore
 from app.cv.demo_data import mock_meta_for_scenario, scenario_by_key
-from app.cv.types import VisionResult
-from app.cv.utils import clean_plate_text, format_plate, normalize_plate
+from app.cv.types import VisionOptions, VisionResult
+from app.cv.utils import format_plate, normalize_plate
 from app.db.session import session_scope
 from app.models.access import AccessLog, DetectionEvent
 from app.models.base import as_utc
@@ -27,7 +28,6 @@ from app.models.compound import Camera, Compound, Gate
 from app.models.enums import (
     AccessDecision,
     AccessDirection,
-    AccessMethod,
     DetectionType,
     VisitorStatus,
 )
@@ -35,7 +35,7 @@ from app.models.people import Permit
 from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.services.face_service import decode_image, face_service
-from app.services.vehicle_service import vehicle_service
+from app.services.compound_policy import CompoundPolicy
 from app.cv.worker import ResultEnvelope
 
 logger = get_logger(__name__)
@@ -120,6 +120,16 @@ class DetectionService:
             occurred_at=occurred_at,
         )
         decision = await self.decision_engine.decide(session, context)
+        record_decision(decision.decision.value, decision.reason_code)
+        record_vision_result(
+            "plate+face"
+            if result.plate and result.face
+            else "plate"
+            if result.plate
+            else "face"
+            if result.face
+            else "none"
+        )
 
         # ------------------------------------------------------ gate actuation
         gate_opened = False
@@ -238,8 +248,14 @@ class DetectionService:
             height, width = image.shape[:2]
             meta = mock_meta_for_scenario(demo_scenario, width, height)
         gallery = await face_service.load_gallery(session, gate.compound_id)
+        compound = await session.get(Compound, gate.compound_id)
+        policy = CompoundPolicy.from_settings(compound.settings if compound else None)
         result = await asyncio.to_thread(
-            self.engine.analyze_image, image, gallery, meta
+            self.engine.analyze_image,
+            image,
+            gallery,
+            meta,
+            VisionOptions.from_policy(policy),
         )
         return await self.process(
             session,

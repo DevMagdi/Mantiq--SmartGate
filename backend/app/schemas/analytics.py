@@ -95,6 +95,15 @@ class ResidentVehicleStats(BaseModel):
     permits_today: int = 0
 
 
+class ReasonBreakdown(BaseModel):
+    """How often a decision reason was used (top reasons are actionable)."""
+
+    reason_code: str
+    decision: str
+    count: int
+    percentage: float
+
+
 class DashboardResponse(BaseModel):
     """Everything the dashboard needs in a single round-trip."""
 
@@ -107,6 +116,8 @@ class DashboardResponse(BaseModel):
     decision_breakdown: list[DecisionBreakdown]
     method_breakdown: list[MethodBreakdown]
     gate_performance: list[GatePerformance]
+    reason_breakdown: list[ReasonBreakdown] = Field(default_factory=list)
+    barrier_failures: int = 0
     heatmap: list[HourlyHeatmapCell] = Field(default_factory=list)
     recent_access: list[AccessLogRead] = Field(default_factory=list)
     recent_detections: list[DetectionEventRead] = Field(default_factory=list)

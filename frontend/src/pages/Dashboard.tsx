@@ -29,11 +29,13 @@ import {
   Td,
   Th,
   TableShell,
+  cn,
 } from "@/components/ui";
 import { useTheme } from "@/hooks/useTheme";
+import { useI18n } from "@/i18n";
 import { fetchDashboard } from "@/services/analytics";
 import { mediaUrl } from "@/services/api";
-import { DECISION_META } from "@/utils/constants";
+import { DECISION_META, reasonLabel } from "@/utils/constants";
 import { formatPercent, formatTime } from "@/utils/format";
 
 const DECISION_COLORS = {
@@ -43,8 +45,16 @@ const DECISION_COLORS = {
   review: "#0ea5e9",
 };
 
+const DECISION_BAR: Record<string, string> = {
+  allow: "bg-brand-500",
+  deny: "bg-rose-500",
+  unknown: "bg-amber-500",
+  review: "bg-sky-500",
+};
+
 export function DashboardPage(): JSX.Element {
   const { theme } = useTheme();
+  const { t, reason } = useI18n();
   const [days, setDays] = useState(7);
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["dashboard", days],
@@ -97,34 +107,37 @@ export function DashboardPage(): JSX.Element {
   );
 
   const overview = data?.overview;
+  const reasons = useMemo(() => data?.reason_breakdown ?? [], [data]);
+  const barrierFailures = data?.barrier_failures ?? 0;
+  const pendingReviews = overview?.review_today ?? 0;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Command centre"
-        title="Compound overview"
-        subtitle="Live gate health, today's traffic and decision quality across the compound."
+        eyebrow={t("dashboard.eyebrow")}
+        title={t("dashboard.title")}
+        subtitle={t("dashboard.subtitle")}
         actions={
           <>
             <select
               value={days}
               onChange={(event) => setDays(Number(event.target.value))}
               className="focus-ring h-10 rounded-xl border border-ink-200 bg-white px-3 text-xs font-semibold text-ink-600 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-300"
-              aria-label="Analytics range"
+              aria-label={t("dashboard.range")}
             >
-              <option value={7}>Last 7 days</option>
-              <option value={14}>Last 14 days</option>
-              <option value={30}>Last 30 days</option>
+              <option value={7}>{t("dashboard.range.7")}</option>
+              <option value={14}>{t("dashboard.range.14")}</option>
+              <option value={30}>{t("dashboard.range.30")}</option>
             </select>
             <Button variant="outline" size="md" icon="refresh" onClick={() => void refetch()} loading={isFetching && !isLoading}>
-              Refresh
+              {t("dashboard.refresh")}
             </Button>
             <Link
               to="/live"
               className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-500"
             >
               <Icon name="live" className="h-4 w-4" />
-              Live monitor
+              {t("dashboard.live")}
             </Link>
           </>
         }
@@ -134,95 +147,190 @@ export function DashboardPage(): JSX.Element {
         <Card className="border-rose-200 dark:border-rose-900/60">
           <EmptyState
             icon="alert"
-            title="Could not load analytics"
-            description={error instanceof Error ? error.message : "Please retry in a moment."}
-            action={<Button onClick={() => void refetch()} icon="refresh">Retry</Button>}
+            title={t("dashboard.error.title")}
+            description={error instanceof Error ? error.message : t("dashboard.error.retry")}
+            action={<Button onClick={() => void refetch()} icon="refresh">{t("dashboard.error.retry")}</Button>}
           />
         </Card>
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Entries today"
+          label={t("dashboard.kpi.entries")}
           value={overview?.entries_today ?? "—"}
           icon="car"
           tone="brand"
-          hint={`${overview?.unique_vehicles_today ?? 0} unique vehicles`}
+          hint={t("dashboard.kpi.entries.hint", { count: overview?.unique_vehicles_today ?? 0 })}
           trend={overview?.entries_change_pct ?? null}
           loading={isLoading}
         />
         <StatCard
-          label="Denied / blocked"
+          label={t("dashboard.kpi.denied")}
           value={overview?.denied_today ?? "—"}
           icon="shield"
           tone="danger"
-          hint={`${overview?.review_today ?? 0} awaiting manual review`}
+          hint={t("dashboard.kpi.denied.hint", { count: overview?.review_today ?? 0 })}
           loading={isLoading}
         />
         <StatCard
-          label="Vehicles inside"
+          label={t("dashboard.kpi.inside")}
           value={overview?.vehicles_inside ?? "—"}
           icon="gate"
           tone="info"
-          hint={`${overview?.exits_today ?? 0} exits today`}
+          hint={t("dashboard.kpi.inside.hint", { count: overview?.exits_today ?? 0 })}
           loading={isLoading}
         />
         <StatCard
-          label="Face match rate"
+          label={t("dashboard.kpi.face")}
           value={overview ? formatPercent(overview.face_match_rate) : "—"}
           icon="users"
           tone="success"
-          hint={`${overview?.cameras_online ?? 0}/${overview?.cameras_total ?? 0} cameras online`}
+          hint={t("dashboard.kpi.face.hint", {
+            online: overview?.cameras_online ?? 0,
+            total: overview?.cameras_total ?? 0,
+          })}
           loading={isLoading}
         />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Allowed today"
+          label={t("dashboard.kpi.allowed")}
           value={overview?.allowed_today ?? "—"}
           icon="check"
           tone="success"
-          hint="Barrier released"
+          hint={t("dashboard.kpi.allowed.hint")}
           loading={isLoading}
         />
         <StatCard
-          label="Unknown plates"
+          label={t("dashboard.kpi.unknown")}
           value={overview?.unknown_today ?? "—"}
           icon="alert"
           tone="warning"
-          hint={`Plate read rate ${formatPercent(overview?.plate_read_rate ?? 0)}`}
+          hint={t("dashboard.kpi.unknown.hint", {
+            value: formatPercent(overview?.plate_read_rate ?? 0),
+          })}
           loading={isLoading}
         />
         <StatCard
-          label="Active visitors"
+          label={t("dashboard.kpi.visitors")}
           value={overview?.active_visitors ?? "—"}
           icon="visitors"
           tone="info"
-          hint={`${overview?.active_permits ?? 0} active permits`}
+          hint={t("dashboard.kpi.visitors.hint", { count: overview?.active_permits ?? 0 })}
           loading={isLoading}
         />
         <StatCard
-          label="Residents / vehicles"
+          label={t("dashboard.kpi.registry")}
           value={overview ? `${overview.residents_total} / ${overview.vehicles_total}` : "—"}
           icon="users"
           tone="neutral"
-          hint={`${overview?.blacklist_active ?? 0} blacklist entries`}
+          hint={t("dashboard.kpi.registry.hint", { count: overview?.blacklist_active ?? 0 })}
           loading={isLoading}
         />
       </div>
 
+      {isLoading ? null : (
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="xl:col-span-2">
+            <CardHeader
+              title={t("dashboard.insights.title")}
+              subtitle={t("dashboard.insights.subtitle")}
+              icon="shield"
+              actions={
+                <Link
+                  to="/live"
+                  className="text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400"
+                >
+                  {t("dashboard.review_now")}
+                </Link>
+              }
+            />
+            {reasons.length === 0 ? (
+              <EmptyState
+                icon="shield"
+                title={t("dashboard.insights.empty")}
+                description={t("dashboard.chart.trend.subtitle")}
+              />
+            ) : (
+              <div className="space-y-3 px-4 pb-4">
+                {reasons.map((item) => (
+                  <div key={item.reason_code} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Badge tone={DECISION_META[item.decision]?.tone ?? "neutral"} dot>
+                          {t(`decision.${item.decision}`)}
+                        </Badge>
+                        <span className="truncate font-medium text-ink-700 dark:text-ink-200">
+                          {reason(item.reason_code, reasonLabel(item.reason_code))}
+                        </span>
+                      </span>
+                      <span className="shrink-0 tabular-nums font-semibold text-ink-600 dark:text-ink-300">
+                        {item.count}
+                        <span className="ms-1 text-[10px] font-normal text-ink-400">
+                          {(item.percentage * 100).toFixed(0)}%
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all",
+                          DECISION_BAR[item.decision] ?? "bg-ink-400",
+                        )}
+                        style={{ width: `${Math.max(4, Math.min(100, item.percentage * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <div className="space-y-3">
+            <StatCard
+              label={t("dashboard.barrier_failures")}
+              value={barrierFailures}
+              icon="gate"
+              tone={barrierFailures > 0 ? "danger" : "success"}
+              hint={
+                barrierFailures > 0
+                  ? t("dashboard.barrier_failures.hint")
+                  : t("dashboard.healthy.hint")
+              }
+            />
+            <Card>
+              <CardHeader
+                title={t("dashboard.reviews")}
+                subtitle={t("dashboard.reviews.hint")}
+                icon="alert"
+              />
+              <div className="flex items-center justify-between px-4 pb-4">
+                <p className="text-3xl font-bold tabular-nums">{pendingReviews}</p>
+                <Link
+                  to="/live"
+                  className="focus-ring inline-flex h-9 items-center gap-2 rounded-xl bg-brand-600 px-3 text-xs font-semibold text-white transition hover:bg-brand-500"
+                >
+                  <Icon name="live" className="h-3.5 w-3.5" />
+                  {t("dashboard.review_now")}
+                </Link>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
       {isLoading ? (
         <Card>
-          <LoadingBlock label="Loading analytics…" />
+          <LoadingBlock label={t("dashboard.loading")} />
         </Card>
       ) : (
         <>
           <div className="grid gap-4 xl:grid-cols-3">
             <Card className="xl:col-span-2">
               <CardHeader
-                title="Access decisions over time"
-                subtitle={`Daily allowed, denied, unknown and review outcomes · last ${days} days`}
+                title={t("dashboard.chart.trend")}
+                subtitle={`${t("dashboard.chart.trend.subtitle")} · ${days}d`}
                 icon="dashboard"
                 actions={
                   <div className="flex items-center gap-3 text-[11px] text-ink-500 dark:text-ink-400">
@@ -258,7 +366,11 @@ export function DashboardPage(): JSX.Element {
             </Card>
 
             <Card>
-              <CardHeader title="Decision mix" subtitle="Share of outcomes in the range" icon="shield" />
+              <CardHeader
+                title={t("dashboard.chart.mix")}
+                subtitle={t("dashboard.chart.mix.subtitle")}
+                icon="shield"
+              />
               <div className="h-[220px] px-4 pt-2">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -273,7 +385,7 @@ export function DashboardPage(): JSX.Element {
               </div>
               <div className="space-y-1.5 px-4 pb-4">
                 {pie.length === 0 ? (
-                  <p className="text-center text-xs text-ink-400">No decisions recorded yet.</p>
+                  <p className="text-center text-xs text-ink-400">{t("dashboard.chart.mix.empty")}</p>
                 ) : (
                   pie.map((item) => (
                     <div key={item.decision} className="flex items-center justify-between text-xs">
@@ -283,7 +395,7 @@ export function DashboardPage(): JSX.Element {
                       </span>
                       <span className="font-semibold text-ink-800 dark:text-ink-100">
                         {item.count}
-                        <span className="ml-1 text-[10px] font-normal text-ink-400">
+                        <span className="ms-1 text-[10px] font-normal text-ink-400">
                           {item.percentage.toFixed(0)}%
                         </span>
                       </span>
@@ -296,7 +408,11 @@ export function DashboardPage(): JSX.Element {
 
           <div className="grid gap-4 xl:grid-cols-3">
             <Card className="xl:col-span-2">
-              <CardHeader title="Peak hours" subtitle="Entries and exits by hour of day" icon="clock" />
+              <CardHeader
+                title={t("dashboard.chart.peak")}
+                subtitle={t("dashboard.chart.peak.subtitle")}
+                icon="clock"
+              />
               <div className="h-[240px] px-2 py-4">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={peak} margin={{ top: 8, right: 12, left: -18, bottom: 0 }} barGap={2}>
@@ -313,12 +429,12 @@ export function DashboardPage(): JSX.Element {
 
             <Card>
               <CardHeader
-                title="Gate performance"
-                subtitle="Decisions by gate in the selected range"
+                title={t("dashboard.gates.title")}
+                subtitle={t("dashboard.gates.subtitle")}
                 icon="gate"
                 actions={
                   <Link to="/settings" className="text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
-                    Manage
+                    {t("dashboard.gates.manage")}
                   </Link>
                 }
               />
@@ -331,20 +447,20 @@ export function DashboardPage(): JSX.Element {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-semibold text-ink-800 dark:text-ink-100">
                         {gate.gate_name}
-                        <span className="ml-1.5 font-mono text-[10px] font-normal text-ink-400">{gate.gate_code}</span>
+                        <span className="ms-1.5 font-mono text-[10px] font-normal text-ink-400">{gate.gate_code}</span>
                       </p>
                       <p className="text-[10px] text-ink-400">
                         {gate.allowed} allowed · {gate.denied} denied · {gate.unknown} unknown
                       </p>
                     </div>
-                    <div className="text-right">
+                    <div className="text-end">
                       <p className="text-sm font-bold">{gate.total}</p>
                       <p className="text-[9px] uppercase tracking-wide text-ink-400">events</p>
                     </div>
                   </div>
                 ))}
                 {(data?.gate_performance ?? []).length === 0 ? (
-                  <p className="px-4 py-6 text-center text-xs text-ink-400">No gate activity yet.</p>
+                  <p className="px-4 py-6 text-center text-xs text-ink-400">{t("dashboard.gates.empty")}</p>
                 ) : null}
               </div>
             </Card>
@@ -352,27 +468,31 @@ export function DashboardPage(): JSX.Element {
 
           <Card>
             <CardHeader
-              title="Recent gate activity"
-              subtitle="Latest decisions recorded by the vision pipeline"
+              title={t("dashboard.recent.title")}
+              subtitle={t("dashboard.recent.subtitle")}
               icon="logs"
               actions={
                 <Link to="/logs" className="text-[11px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
-                  Open access logs →
+                  {t("dashboard.recent.open")}
                 </Link>
               }
             />
             {(data?.recent_access ?? []).length === 0 ? (
-              <EmptyState icon="logs" title="No access events yet" description="Events appear here as soon as a gate decision is recorded." />
+              <EmptyState
+                icon="logs"
+                title={t("dashboard.recent.empty_title")}
+                description={t("dashboard.recent.empty_description")}
+              />
             ) : (
               <TableShell>
                 <thead>
                   <tr>
-                    <Th>Time</Th>
-                    <Th>Plate / person</Th>
-                    <Th>Gate</Th>
-                    <Th>Decision</Th>
-                    <Th>Reason</Th>
-                    <Th align="right">Snapshot</Th>
+                    <Th>{t("dashboard.table.time")}</Th>
+                    <Th>{t("dashboard.table.plate")}</Th>
+                    <Th>{t("dashboard.table.gate")}</Th>
+                    <Th>{t("dashboard.table.decision")}</Th>
+                    <Th>{t("dashboard.table.reason")}</Th>
+                    <Th align="right">{t("dashboard.table.snapshot")}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -383,19 +503,19 @@ export function DashboardPage(): JSX.Element {
                       <tr key={log.id} className="transition hover:bg-ink-50/70 dark:hover:bg-ink-800/30">
                         <Td className="whitespace-nowrap text-xs text-ink-500 dark:text-ink-400">
                           {formatTime(log.occurred_at)}
-                          <span className="ml-1 text-[10px] text-ink-300 dark:text-ink-600">{log.direction}</span>
+                          <span className="ms-1 text-[10px] text-ink-300 dark:text-ink-600">{log.direction}</span>
                         </Td>
                         <Td>
                           <p className="font-mono text-xs font-semibold uppercase tracking-wide text-ink-900 dark:text-ink-100">
-                            {log.plate_number ?? "Pedestrian"}
+                            {log.plate_number ?? t("dashboard.pedestrian")}
                           </p>
                           <p className="text-[10px] text-ink-400">
-                            {log.resident?.full_name ?? log.visitor?.full_name ?? "Unrecognised"}
+                            {log.resident?.full_name ?? log.visitor?.full_name ?? t("dashboard.unrecognised")}
                           </p>
                         </Td>
                         <Td className="text-xs">{log.gate?.name ?? "—"}</Td>
                         <Td>
-                          <Badge tone={meta.tone} dot>{meta.label}</Badge>
+                          <Badge tone={meta.tone} dot>{t(`decision.${log.decision}`)}</Badge>
                         </Td>
                         <Td className="max-w-[260px] truncate text-xs text-ink-500 dark:text-ink-400">{log.reason}</Td>
                         <Td align="right">

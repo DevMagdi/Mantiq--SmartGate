@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from typing import Sequence
 
 import cv2
@@ -11,64 +10,33 @@ import numpy as np
 
 from app.cv.types import BoundingBox, Image
 
-ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
-_ARABIC_TRANSLATION = {ord(ch): str(idx) for idx, ch in enumerate(ARABIC_DIGITS)}
-_OCR_KEEP = re.compile(r"[^A-Z0-9\u0600-\u06FF]")
-
-# Frequent OCR confusions on Gulf/Egyptian plates. Applied only when generating
-# *alternative lookup keys* so a single misread character does not lose a match.
-_CONFUSIONS = str.maketrans({"O": "0", "Q": "0", "I": "1", "L": "1", "S": "5", "B": "8"})
-_REVERSE_CONFUSIONS = str.maketrans({"0": "O", "1": "I", "5": "S", "8": "B"})
-
-
-def clean_plate_text(raw: str) -> str:
-    """Uppercase, drop separators and normalise Arabic-Indic digits."""
-    text = raw.translate(_ARABIC_TRANSLATION).upper()
-    text = _OCR_KEEP.sub("", text)
-    return text.strip()
-
-
-def normalize_plate(text: str | None) -> str:
-    """Normalise a plate into the canonical identity key.
-
-    The canonical key keeps letters intact (``CAI 4821`` → ``CAI4821``) so that
-    stored registrations stay human-recognisable. OCR ambiguity is handled at
-    lookup time by :func:`plate_variants`.
-    """
-    if not text:
-        return ""
-    return clean_plate_text(text)
-
-
-def plate_variants(text: str | None) -> set[str]:
-    """Return the canonical key plus common OCR-confusion alternatives."""
-    base = normalize_plate(text)
-    if not base:
-        return set()
-    variants = {base, base.translate(_CONFUSIONS), base.translate(_REVERSE_CONFUSIONS)}
-    return {variant for variant in variants if variant}
-
-
-def format_plate(text: str | None) -> str:
-    """Return a human-friendly plate (``cai-4821`` → ``CAI 4821``)."""
-    cleaned = clean_plate_text(text or "")
-    tokens = re.findall(r"[A-Z\u0600-\u06FF]+|\d+", cleaned)
-    return " ".join(tokens) if tokens else cleaned
+from app.cv.plate_rules import (  # noqa: F401 - re-exported for existing imports
+    ARABIC_INDIC_DIGITS as ARABIC_DIGITS,
+    MAX_PLATE_LENGTH,
+    MIN_PLATE_LENGTH,
+    PlateParse,
+    best_plate_match,
+    clean_plate_text,
+    describe_plate,
+    format_plate,
+    format_plate_latin,
+    has_arabic,
+    levenshtein,
+    merge_plate_readings,
+    normalize_plate,
+    parse_plate,
+    plate_display,
+    plate_similarity,
+    plate_variants,
+    quality_score,
+    transliterate_plate,
+    valid_plate_candidate,
+)
 
 
 def plate_match_key(text: str | None) -> str:
     """Alias kept explicit for readability at call sites."""
     return normalize_plate(text)
-
-
-def valid_plate_candidate(text: str, min_length: int = 3) -> bool:
-    """Reject obviously malformed OCR output."""
-    cleaned = clean_plate_text(text)
-    if len(cleaned) < min_length:
-        return False
-    digits = sum(ch.isdigit() for ch in cleaned)
-    letters = sum(ch.isalpha() for ch in cleaned)
-    return digits >= 1 and letters >= 1
 
 
 def resize_for_inference(image: Image, width: int) -> Image:

@@ -21,6 +21,7 @@ import {
   Th,
 } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { useI18n } from "@/i18n";
 import { useToast } from "@/hooks/useToast";
 import {
   createCamera,
@@ -54,7 +55,7 @@ import type {
   User,
   UserRole,
 } from "@/types/models";
-import { GATE_STATUS_META, ROLE_LABELS } from "@/utils/constants";
+import { GATE_STATUS_META } from "@/utils/constants";
 import { formatDateTime, initials } from "@/utils/format";
 
 type TabKey = "gates" | "cameras" | "users" | "account";
@@ -88,6 +89,7 @@ const EMPTY_USER = {
 };
 
 export function SettingsPage(): JSX.Element {
+  const { t } = useI18n();
   const { user, hasRole, changePassword } = useAuth();
   const isAdmin = hasRole("admin");
   const isManager = hasRole("admin", "security_officer");
@@ -142,7 +144,7 @@ export function SettingsPage(): JSX.Element {
 
   const gateMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!compound) throw new Error("No compound available");
+      if (!compound) throw new Error(t("settings.error.no_compound"));
       const payload: GatePayload = { ...gateForm, compound_id: compound.id };
       if (editingGate) {
         await updateGate(editingGate.id, {
@@ -157,18 +159,18 @@ export function SettingsPage(): JSX.Element {
       }
     },
     onSuccess: async () => {
-      toast.success(editingGate ? "Gate updated" : "Gate created");
+      toast.success(editingGate ? t("settings.toast.gate_saved") : t("settings.toast.gate_created"));
       setGateOpen(false);
       setEditingGate(null);
       setGateForm(EMPTY_GATE);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not save gate", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.gate_error"), apiErrorMessage(error)),
   });
 
   const cameraMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!cameraForm.gate_id) throw new Error("Select a gate");
+      if (!cameraForm.gate_id) throw new Error(t("settings.error.select_gate"));
       if (editingCamera) {
         await updateCamera(editingCamera.id, {
           name: cameraForm.name,
@@ -183,13 +185,13 @@ export function SettingsPage(): JSX.Element {
       }
     },
     onSuccess: async () => {
-      toast.success(editingCamera ? "Camera updated" : "Camera added");
+      toast.success(editingCamera ? t("settings.toast.camera_saved") : t("settings.toast.camera_created"));
       setCameraOpen(false);
       setEditingCamera(null);
       setCameraForm(EMPTY_CAMERA);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not save camera", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.camera_error"), apiErrorMessage(error)),
   });
 
   const userMutation = useMutation({
@@ -205,72 +207,72 @@ export function SettingsPage(): JSX.Element {
       await createUser(payload);
     },
     onSuccess: async () => {
-      toast.success("User created");
+      toast.success(t("settings.toast.user_created"));
       setUserOpen(false);
       setUserForm(EMPTY_USER);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not create user", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.user_error"), apiErrorMessage(error)),
   });
 
   const resetPasswordMutation = useMutation({
     mutationFn: ({ id, password }: { id: string; password: string }) => resetUserPassword(id, password),
     onSuccess: () => {
-      toast.success("Password reset");
+      toast.success(t("settings.toast.password_reset"));
       setPasswordTarget(null);
       setNewPassword("");
     },
-    onError: (error) => toast.error("Could not reset password", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.password_error"), apiErrorMessage(error)),
   });
 
   const deactivateMutation = useMutation({
     mutationFn: (target: User) => deactivateUser(target.id),
     onSuccess: async () => {
-      toast.success("User deactivated");
+      toast.success(t("settings.toast.user_deactivated"));
       setUserToDeactivate(null);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not deactivate user", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.deactivate_error"), apiErrorMessage(error)),
   });
 
   const toggleCameraMutation = useMutation({
     mutationFn: ({ camera, active }: { camera: Camera; active: boolean }) => toggleCamera(camera.id, active),
     onSuccess: async (camera) => {
-      toast.success(`Camera ${camera.status}`);
+      toast.success(t("settings.toast.camera_status", { status: t(`status.${camera.status}`) }));
       await invalidate();
     },
-    onError: (error) => toast.error("Could not toggle camera", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.camera_toggle_error"), apiErrorMessage(error)),
   });
 
   const deleteCameraMutation = useMutation({
     mutationFn: (camera: Camera) => deleteCamera(camera.id),
     onSuccess: async () => {
-      toast.success("Camera deleted");
+      toast.success(t("settings.toast.camera_deleted"));
       setCameraToDelete(null);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not delete camera", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.camera_delete_error"), apiErrorMessage(error)),
   });
 
   const deleteGateMutation = useMutation({
     mutationFn: (gate: Gate) => deleteGate(gate.id),
     onSuccess: async () => {
-      toast.success("Gate deleted");
+      toast.success(t("settings.toast.gate_deleted"));
       setGateToDelete(null);
       await invalidate();
     },
-    onError: (error) => toast.error("Could not delete gate", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.gate_delete_error"), apiErrorMessage(error)),
   });
 
   const commandMutation = useMutation({
-    mutationFn: (gate: Gate) => gateCommand(gate.id, "open", "Opened from settings"),
-    onSuccess: (result) => toast.success("Barrier command accepted", result.detail),
-    onError: (error) => toast.error("Command failed", apiErrorMessage(error)),
+    mutationFn: (gate: Gate) => gateCommand(gate.id, "open", t("settings.command_reason")),
+    onSuccess: (result) => toast.success(t("settings.toast.command_accepted"), result.detail),
+    onError: (error) => toast.error(t("settings.toast.command_failed"), apiErrorMessage(error)),
   });
 
   const compoundMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (!compound) throw new Error("No compound available");
+      if (!compound) throw new Error(t("settings.error.no_compound"));
       await updateCompound(compound.id, {
         name: compoundForm.name || compound.name,
         city: compoundForm.city || compound.city,
@@ -279,22 +281,22 @@ export function SettingsPage(): JSX.Element {
       });
     },
     onSuccess: async () => {
-      toast.success("Compound updated");
+      toast.success(t("settings.toast.compound_updated"));
       await invalidate();
     },
-    onError: (error) => toast.error("Could not update compound", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.compound_error"), apiErrorMessage(error)),
   });
 
   const accountMutation = useMutation({
     mutationFn: async (): Promise<void> => {
-      if (accountForm.next !== accountForm.confirm) throw new Error("Passwords do not match");
+      if (accountForm.next !== accountForm.confirm) throw new Error(t("settings.account.password_mismatch"));
       await changePassword(accountForm.current, accountForm.next);
     },
     onSuccess: () => {
-      toast.success("Password changed");
+      toast.success(t("settings.toast.password_changed"));
       setAccountForm({ current: "", next: "", confirm: "" });
     },
-    onError: (error) => toast.error("Could not change password", apiErrorMessage(error)),
+    onError: (error) => toast.error(t("settings.toast.password_change_error"), apiErrorMessage(error)),
   });
 
   const openCreateGate = (): void => {
@@ -338,25 +340,25 @@ export function SettingsPage(): JSX.Element {
   };
 
   const tabs: { key: TabKey; label: string }[] = [
-    ...(isManager ? [{ key: "gates" as TabKey, label: "Gates" }] : []),
-    ...(isManager ? [{ key: "cameras" as TabKey, label: "Cameras" }] : []),
-    ...(isAdmin ? [{ key: "users" as TabKey, label: "Users" }] : []),
-    { key: "account", label: "Account & compound" },
+    ...(isManager ? [{ key: "gates" as TabKey, label: t("settings.tab.gates") }] : []),
+    ...(isManager ? [{ key: "cameras" as TabKey, label: t("settings.tab.cameras") }] : []),
+    ...(isAdmin ? [{ key: "users" as TabKey, label: t("settings.tab.users") }] : []),
+    { key: "account", label: t("settings.tab.account") },
   ];
 
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Configuration"
-        title="Settings"
-        subtitle="Physical gates, camera sources, staff accounts and compound details."
+        eyebrow={t("settings.eyebrow")}
+        title={t("settings.title")}
+        subtitle={t("settings.subtitle")}
         actions={
           tab === "gates" ? (
-            <Button icon="plus" onClick={openCreateGate}>Add gate</Button>
+            <Button icon="plus" onClick={openCreateGate}>{t("settings.add_gate")}</Button>
           ) : tab === "cameras" ? (
-            <Button icon="plus" onClick={() => openCreateCamera()}>Add camera</Button>
+            <Button icon="plus" onClick={() => openCreateCamera()}>{t("settings.add_camera")}</Button>
           ) : tab === "users" ? (
-            <Button icon="plus" onClick={() => setUserOpen(true)}>Create user</Button>
+            <Button icon="plus" onClick={() => setUserOpen(true)}>{t("settings.create_user")}</Button>
           ) : null
         }
       />
@@ -365,21 +367,21 @@ export function SettingsPage(): JSX.Element {
 
       {tab === "gates" ? (
         <Card>
-          <CardHeader title="Gates" subtitle="Entry, exit and service lanes for the compound" icon="gate" />
+          <CardHeader title={t("settings.gates.title")} subtitle={t("settings.gates.subtitle")} icon="gate" />
           {gates.isLoading ? (
             <LoadingBlock />
           ) : gateOptions.length === 0 ? (
-            <EmptyState icon="gate" title="No gates configured" description="Create the first gate to connect cameras and barriers." action={<Button icon="plus" onClick={openCreateGate}>Add gate</Button>} />
+            <EmptyState icon="gate" title={t("settings.gates.empty_title")} description={t("settings.gates.empty_description")} action={<Button icon="plus" onClick={openCreateGate}>{t("settings.add_gate")}</Button>} />
           ) : (
             <TableShell>
               <thead>
                 <tr>
-                  <Th>Gate</Th>
-                  <Th>Direction</Th>
-                  <Th>Status</Th>
-                  <Th>Cameras</Th>
-                  <Th>Location</Th>
-                  <Th align="right">Actions</Th>
+                  <Th>{t("settings.table.gate")}</Th>
+                  <Th>{t("common.direction")}</Th>
+                  <Th>{t("common.status")}</Th>
+                  <Th>{t("settings.table.cameras")}</Th>
+                  <Th>{t("settings.table.location")}</Th>
+                  <Th align="right">{t("common.actions")}</Th>
                 </tr>
               </thead>
               <tbody>
@@ -389,17 +391,17 @@ export function SettingsPage(): JSX.Element {
                       <p className="text-sm font-semibold text-ink-900 dark:text-ink-100">{gate.name}</p>
                       <p className="font-mono text-[10px] text-ink-400">{gate.code}</p>
                     </Td>
-                    <Td className="text-xs capitalize">{gate.direction}</Td>
-                    <Td><Badge tone={GATE_STATUS_META[gate.status].tone} dot>{GATE_STATUS_META[gate.status].label}</Badge></Td>
+                    <Td className="text-xs capitalize">{t(`direction.${gate.direction}`)}</Td>
+                    <Td><Badge tone={GATE_STATUS_META[gate.status].tone} dot>{t(`status.${gate.status}`)}</Badge></Td>
                     <Td className="text-xs">{gate.cameras.length}</Td>
                     <Td className="text-xs">{gate.location ?? "—"}</Td>
                     <Td align="right">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="subtle" icon="play" onClick={() => commandMutation.mutate(gate)}>Open</Button>
-                        <Button size="icon" variant="ghost" onClick={() => openCreateCamera(gate.id)} aria-label="Add camera"><Icon name="camera" className="h-4 w-4" /></Button>
-                        <Button size="icon" variant="ghost" onClick={() => openEditGate(gate)} aria-label="Edit gate"><Icon name="edit" className="h-4 w-4" /></Button>
+                        <Button size="sm" variant="subtle" icon="play" onClick={() => commandMutation.mutate(gate)}>{t("settings.action.open")}</Button>
+                        <Button size="icon" variant="ghost" onClick={() => openCreateCamera(gate.id)} aria-label={t("settings.action.add_camera")}><Icon name="camera" className="h-4 w-4" /></Button>
+                        <Button size="icon" variant="ghost" onClick={() => openEditGate(gate)} aria-label={t("settings.action.edit_gate")}><Icon name="edit" className="h-4 w-4" /></Button>
                         {isAdmin ? (
-                          <Button size="icon" variant="ghost" onClick={() => setGateToDelete(gate)} aria-label="Delete gate"><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
+                          <Button size="icon" variant="ghost" onClick={() => setGateToDelete(gate)} aria-label={t("settings.action.delete_gate")}><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
                         ) : null}
                       </div>
                     </Td>
@@ -413,21 +415,21 @@ export function SettingsPage(): JSX.Element {
 
       {tab === "cameras" ? (
         <Card>
-          <CardHeader title="Cameras" subtitle="RTSP, USB and demo sources feeding the vision pipeline" icon="camera" />
+          <CardHeader title={t("settings.cameras.title")} subtitle={t("settings.cameras.subtitle")} icon="camera" />
           {cameras.isLoading ? (
             <LoadingBlock />
           ) : (cameras.data?.items ?? []).length === 0 ? (
-            <EmptyState icon="camera" title="No cameras connected" description="Add a stream so the gate controller can see vehicles." action={<Button icon="plus" onClick={() => openCreateCamera()}>Add camera</Button>} />
+            <EmptyState icon="camera" title={t("settings.cameras.empty_title")} description={t("settings.cameras.empty_description")} action={<Button icon="plus" onClick={() => openCreateCamera()}>{t("settings.add_camera")}</Button>} />
           ) : (
             <TableShell>
               <thead>
                 <tr>
-                  <Th>Camera</Th>
-                  <Th>Gate</Th>
-                  <Th>Source</Th>
-                  <Th>Status</Th>
-                  <Th>Last frame</Th>
-                  <Th align="right">Actions</Th>
+                  <Th>{t("settings.table.camera")}</Th>
+                  <Th>{t("settings.table.gate")}</Th>
+                  <Th>{t("settings.table.source")}</Th>
+                  <Th>{t("common.status")}</Th>
+                  <Th>{t("settings.table.last_frame")}</Th>
+                  <Th align="right">{t("common.actions")}</Th>
                 </tr>
               </thead>
               <tbody>
@@ -445,15 +447,15 @@ export function SettingsPage(): JSX.Element {
                         <p className="text-[10px] font-semibold uppercase text-ink-400">{camera.source_type}</p>
                         <p className="max-w-[220px] truncate font-mono text-[10px] text-ink-500 dark:text-ink-400">{camera.source_url}</p>
                       </Td>
-                      <Td><Badge tone={online ? "success" : camera.status === "error" ? "danger" : "neutral"} dot>{camera.status}</Badge></Td>
+                      <Td><Badge tone={online ? "success" : camera.status === "error" ? "danger" : "neutral"} dot>{t(`status.${camera.status}`, {})}</Badge></Td>
                       <Td className="whitespace-nowrap text-[11px] text-ink-500 dark:text-ink-400">{formatDateTime(camera.last_frame_at)}</Td>
                       <Td align="right">
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="ghost" onClick={() => toggleCameraMutation.mutate({ camera, active: !camera.is_active })}>
-                            {camera.is_active ? "Disable" : "Enable"}
+                            {camera.is_active ? t("common.disable") : t("common.enable")}
                           </Button>
-                          <Button size="icon" variant="ghost" onClick={() => openEditCamera(camera)} aria-label="Edit camera"><Icon name="edit" className="h-4 w-4" /></Button>
-                          <Button size="icon" variant="ghost" onClick={() => setCameraToDelete(camera)} aria-label="Delete camera"><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
+                          <Button size="icon" variant="ghost" onClick={() => openEditCamera(camera)} aria-label={t("settings.action.edit_camera")}><Icon name="edit" className="h-4 w-4" /></Button>
+                          <Button size="icon" variant="ghost" onClick={() => setCameraToDelete(camera)} aria-label={t("settings.action.delete_camera")}><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
                         </div>
                       </Td>
                     </tr>
@@ -467,18 +469,18 @@ export function SettingsPage(): JSX.Element {
 
       {tab === "users" && isAdmin ? (
         <Card>
-          <CardHeader title="Staff accounts" subtitle="Administrators and security officers" icon="users" />
+          <CardHeader title={t("settings.users.title")} subtitle={t("settings.users.subtitle")} icon="users" />
           {users.isLoading ? (
             <LoadingBlock />
           ) : (
             <TableShell>
               <thead>
                 <tr>
-                  <Th>User</Th>
-                  <Th>Role</Th>
-                  <Th>Status</Th>
-                  <Th>Last login</Th>
-                  <Th align="right">Actions</Th>
+                  <Th>{t("settings.table.user")}</Th>
+                  <Th>{t("common.role")}</Th>
+                  <Th>{t("common.status")}</Th>
+                  <Th>{t("settings.table.last_login")}</Th>
+                  <Th align="right">{t("common.actions")}</Th>
                 </tr>
               </thead>
               <tbody>
@@ -493,22 +495,22 @@ export function SettingsPage(): JSX.Element {
                         </div>
                       </div>
                     </Td>
-                    <Td><Badge tone={item.role === "admin" ? "brand" : item.role === "security_officer" ? "info" : "neutral"}>{ROLE_LABELS[item.role]}</Badge></Td>
-                    <Td><Badge tone={item.is_active ? "success" : "neutral"} dot>{item.is_active ? "Active" : "Disabled"}</Badge></Td>
+                    <Td><Badge tone={item.role === "admin" ? "brand" : item.role === "security_officer" ? "info" : "neutral"}>{t(`role.${item.role}`)}</Badge></Td>
+                    <Td><Badge tone={item.is_active ? "success" : "neutral"} dot>{item.is_active ? t("common.active") : t("common.disabled")}</Badge></Td>
                     <Td className="text-[11px] text-ink-500 dark:text-ink-400">{formatDateTime(item.last_login_at)}</Td>
                     <Td align="right">
                       <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost" icon="key" onClick={() => { setPasswordTarget(item); setNewPassword(""); }}>Reset</Button>
+                        <Button size="sm" variant="ghost" icon="key" onClick={() => { setPasswordTarget(item); setNewPassword(""); }}>{t("settings.action.reset")}</Button>
                         <Button size="sm" variant="ghost" onClick={() => {
                           void updateUser(item.id, { is_active: !item.is_active }).then(async () => {
-                            toast.success(item.is_active ? "User disabled" : "User enabled");
+                            toast.success(item.is_active ? t("settings.toast.user_disabled") : t("settings.toast.user_enabled"));
                             await queryClient.invalidateQueries({ queryKey: ["users"] });
-                          }).catch((error) => toast.error("Update failed", apiErrorMessage(error)));
+                          }).catch((error) => toast.error(t("settings.toast.update_failed"), apiErrorMessage(error)));
                         }}>
-                          {item.is_active ? "Disable" : "Enable"}
+                          {item.is_active ? t("common.disable") : t("common.enable")}
                         </Button>
                         {item.is_active ? (
-                          <Button size="icon" variant="ghost" onClick={() => setUserToDeactivate(item)} aria-label="Deactivate user"><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
+                          <Button size="icon" variant="ghost" onClick={() => setUserToDeactivate(item)} aria-label={t("settings.action.deactivate_user")}><Icon name="trash" className="h-4 w-4 text-rose-500" /></Button>
                         ) : null}
                       </div>
                     </Td>
@@ -523,15 +525,15 @@ export function SettingsPage(): JSX.Element {
       {tab === "account" ? (
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
-            <CardHeader title="Your profile" subtitle="Account details and role" icon="users" />
+            <CardHeader title={t("settings.profile.title")} subtitle={t("settings.profile.subtitle")} icon="users" />
             <div className="flex items-center gap-4 p-5">
               <span className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-lg font-bold text-white">{initials(user?.full_name)}</span>
               <div>
                 <p className="text-base font-semibold">{user?.full_name}</p>
                 <p className="text-xs text-ink-500 dark:text-ink-400">{user?.email}</p>
                 <div className="mt-1.5 flex gap-2">
-                  <Badge tone="brand">{user ? ROLE_LABELS[user.role] : ""}</Badge>
-                  <Badge tone={user?.is_active ? "success" : "neutral"} dot>{user?.is_active ? "Active" : "Disabled"}</Badge>
+                  <Badge tone="brand">{user ? t(`role.${user.role}`) : ""}</Badge>
+                  <Badge tone={user?.is_active ? "success" : "neutral"} dot>{user?.is_active ? t("common.active") : t("common.disabled")}</Badge>
                 </div>
               </div>
             </div>
@@ -539,36 +541,36 @@ export function SettingsPage(): JSX.Element {
               className="space-y-3 border-t border-ink-100 p-5 dark:border-ink-800"
               onSubmit={(event) => { event.preventDefault(); accountMutation.mutate(); }}
             >
-              <p className="text-xs font-semibold text-ink-800 dark:text-ink-100">Change password</p>
-              <Input label="Current password" type="password" required value={accountForm.current} onChange={(event) => setAccountForm({ ...accountForm, current: event.target.value })} />
+              <p className="text-xs font-semibold text-ink-800 dark:text-ink-100">{t("settings.account.change_password")}</p>
+              <Input label={t("settings.account.current")} type="password" required value={accountForm.current} onChange={(event) => setAccountForm({ ...accountForm, current: event.target.value })} />
               <div className="grid gap-3 sm:grid-cols-2">
-                <Input label="New password" type="password" required value={accountForm.next} onChange={(event) => setAccountForm({ ...accountForm, next: event.target.value })} hint="At least 8 characters with a letter and a digit" />
-                <Input label="Confirm password" type="password" required value={accountForm.confirm} onChange={(event) => setAccountForm({ ...accountForm, confirm: event.target.value })} error={accountForm.confirm && accountForm.confirm !== accountForm.next ? "Passwords do not match" : undefined} />
+                <Input label={t("settings.account.new")} type="password" required value={accountForm.next} onChange={(event) => setAccountForm({ ...accountForm, next: event.target.value })} hint={t("settings.account.password_hint")} />
+                <Input label={t("settings.account.confirm")} type="password" required value={accountForm.confirm} onChange={(event) => setAccountForm({ ...accountForm, confirm: event.target.value })} error={accountForm.confirm && accountForm.confirm !== accountForm.next ? t("settings.account.password_mismatch") : undefined} />
               </div>
               <Button type="submit" icon="key" loading={accountMutation.isPending} disabled={!accountForm.current || accountForm.next.length < 8 || accountForm.next !== accountForm.confirm}>
-                Update password
+                {t("settings.account.update")}
               </Button>
             </form>
           </Card>
 
           <Card>
-            <CardHeader title="Compound profile" subtitle={isAdmin ? "Details shown across the dashboard" : "Read-only for your role"} icon="gate" />
+            <CardHeader title={t("settings.compound.title")} subtitle={isAdmin ? t("settings.compound.subtitle") : t("settings.compound.subtitle_readonly")} icon="gate" />
             <div className="space-y-4 p-5">
               <div className="grid gap-3 sm:grid-cols-2">
-                <Input label="Compound" value={isAdmin ? compoundForm.name || compound?.name || "" : compound?.name ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, name: event.target.value })} disabled={!isAdmin} />
-                <Input label="City" value={isAdmin ? compoundForm.city || compound?.city || "" : compound?.city ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, city: event.target.value })} disabled={!isAdmin} />
-                <Input label="Contact phone" value={isAdmin ? compoundForm.contact_phone || compound?.contact_phone || "" : compound?.contact_phone ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, contact_phone: event.target.value })} disabled={!isAdmin} />
-                <Input label="Contact email" value={isAdmin ? compoundForm.contact_email || compound?.contact_email || "" : compound?.contact_email ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, contact_email: event.target.value })} disabled={!isAdmin} />
+                <Input label={t("settings.compound.name")} value={isAdmin ? compoundForm.name || compound?.name || "" : compound?.name ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, name: event.target.value })} disabled={!isAdmin} />
+                <Input label={t("settings.compound.city")} value={isAdmin ? compoundForm.city || compound?.city || "" : compound?.city ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, city: event.target.value })} disabled={!isAdmin} />
+                <Input label={t("settings.compound.phone")} value={isAdmin ? compoundForm.contact_phone || compound?.contact_phone || "" : compound?.contact_phone ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, contact_phone: event.target.value })} disabled={!isAdmin} />
+                <Input label={t("settings.compound.email")} value={isAdmin ? compoundForm.contact_email || compound?.contact_email || "" : compound?.contact_email ?? ""} onChange={(event) => setCompoundForm({ ...compoundForm, contact_email: event.target.value })} disabled={!isAdmin} />
               </div>
               <dl className="grid gap-2 rounded-xl bg-ink-50 p-4 text-xs sm:grid-cols-2 dark:bg-ink-900">
-                <div className="flex justify-between gap-2"><dt className="text-ink-500">Code</dt><dd className="font-mono font-semibold">{compound?.code ?? "—"}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-ink-500">Timezone</dt><dd className="font-semibold">{compound?.timezone ?? "—"}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-ink-500">Gates</dt><dd className="font-semibold">{gateOptions.length}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-ink-500">Cameras</dt><dd className="font-semibold">{cameras.data?.total ?? "—"}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-ink-500">{t("common.code")}</dt><dd className="font-mono font-semibold">{compound?.code ?? "—"}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-ink-500">{t("settings.compound.timezone")}</dt><dd className="font-semibold">{compound?.timezone ?? "—"}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-ink-500">{t("settings.tab.gates")}</dt><dd className="font-semibold">{gateOptions.length}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-ink-500">{t("settings.tab.cameras")}</dt><dd className="font-semibold">{cameras.data?.total ?? "—"}</dd></div>
               </dl>
               {isAdmin ? (
                 <Button icon="check" onClick={() => compoundMutation.mutate()} loading={compoundMutation.isPending}>
-                  Save compound
+                  {t("settings.compound.save")}
                 </Button>
               ) : null}
             </div>
@@ -579,111 +581,111 @@ export function SettingsPage(): JSX.Element {
       <Modal
         open={gateOpen}
         onClose={() => setGateOpen(false)}
-        title={editingGate ? "Edit gate" : "Add a gate"}
+        title={editingGate ? t("settings.gate.edit_title") : t("settings.gate.create_title")}
         footer={
           <>
-            <Button variant="outline" onClick={() => setGateOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setGateOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={() => gateMutation.mutate()} loading={gateMutation.isPending} disabled={!gateForm.name.trim() || !gateForm.code.trim()}>
-              {editingGate ? "Save changes" : "Create gate"}
+              {editingGate ? t("common.save_changes") : t("settings.gate.create")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Name" required value={gateForm.name} onChange={(event) => setGateForm({ ...gateForm, name: event.target.value })} placeholder="Main entrance" />
-          <Input label="Code" required value={gateForm.code} onChange={(event) => setGateForm({ ...gateForm, code: event.target.value.toUpperCase() })} placeholder="GATE-IN" className="font-mono" disabled={Boolean(editingGate)} />
-          <Select label="Direction" value={gateForm.direction} onChange={(event) => setGateForm({ ...gateForm, direction: event.target.value as GateDirection })}>
-            <option value="entry">Entry</option>
-            <option value="exit">Exit</option>
-            <option value="bidirectional">Bidirectional</option>
+          <Input label={t("common.name")} required value={gateForm.name} onChange={(event) => setGateForm({ ...gateForm, name: event.target.value })} placeholder={t("settings.gate.name_placeholder")} />
+          <Input label={t("common.code")} required value={gateForm.code} onChange={(event) => setGateForm({ ...gateForm, code: event.target.value.toUpperCase() })} placeholder="GATE-IN" className="font-mono" disabled={Boolean(editingGate)} />
+          <Select label={t("common.direction")} value={gateForm.direction} onChange={(event) => setGateForm({ ...gateForm, direction: event.target.value as GateDirection })}>
+            <option value="entry">{t("direction.entry")}</option>
+            <option value="exit">{t("direction.exit")}</option>
+            <option value="bidirectional">{t("direction.bidirectional")}</option>
           </Select>
-          <Select label="Status" value={gateForm.status} onChange={(event) => setGateForm({ ...gateForm, status: event.target.value as GateStatus })}>
-            <option value="online">Online</option>
-            <option value="maintenance">Maintenance</option>
-            <option value="offline">Offline</option>
+          <Select label={t("common.status")} value={gateForm.status} onChange={(event) => setGateForm({ ...gateForm, status: event.target.value as GateStatus })}>
+            <option value="online">{t("status.online")}</option>
+            <option value="maintenance">{t("status.maintenance")}</option>
+            <option value="offline">{t("status.offline")}</option>
           </Select>
-          <Input label="Location" value={gateForm.location ?? ""} onChange={(event) => setGateForm({ ...gateForm, location: event.target.value })} className="sm:col-span-2" placeholder="North perimeter" />
-          <Textarea label="Notes" value={gateForm.notes ?? ""} onChange={(event) => setGateForm({ ...gateForm, notes: event.target.value })} className="sm:col-span-2" />
+          <Input label={t("settings.table.location")} value={gateForm.location ?? ""} onChange={(event) => setGateForm({ ...gateForm, location: event.target.value })} className="sm:col-span-2" placeholder={t("settings.gate.location_placeholder")} />
+          <Textarea label={t("common.notes")} value={gateForm.notes ?? ""} onChange={(event) => setGateForm({ ...gateForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
-        title={editingCamera ? "Edit camera" : "Add a camera"}
-        description="RTSP URLs should include credentials when required, e.g. rtsp://user:pass@host/stream."
+        title={editingCamera ? t("settings.camera.edit_title") : t("settings.camera.create_title")}
+        description={t("settings.camera.description")}
         footer={
           <>
-            <Button variant="outline" onClick={() => setCameraOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setCameraOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={() => cameraMutation.mutate()} loading={cameraMutation.isPending} disabled={!cameraForm.name.trim() || !cameraForm.source_url.trim() || !cameraForm.gate_id}>
-              {editingCamera ? "Save changes" : "Add camera"}
+              {editingCamera ? t("common.save_changes") : t("settings.add_camera")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Name" required value={cameraForm.name} onChange={(event) => setCameraForm({ ...cameraForm, name: event.target.value })} placeholder="Entry lane camera" />
-          <Select label="Gate" value={cameraForm.gate_id} onChange={(event) => setCameraForm({ ...cameraForm, gate_id: event.target.value })}>
-            <option value="">Select a gate…</option>
+          <Input label="Name" required value={cameraForm.name} onChange={(event) => setCameraForm({ ...cameraForm, name: event.target.value })} placeholder={t("settings.camera.name_placeholder")} />
+          <Select label={t("settings.table.gate")} value={cameraForm.gate_id} onChange={(event) => setCameraForm({ ...cameraForm, gate_id: event.target.value })}>
+            <option value="">{t("settings.camera.select_gate")}</option>
             {gateOptions.map((gate) => (
               <option key={gate.id} value={gate.id}>{gate.name}</option>
             ))}
           </Select>
-          <Select label="Source type" value={cameraForm.source_type} onChange={(event) => setCameraForm({ ...cameraForm, source_type: event.target.value as CameraSourceType })}>
+          <Select label={t("settings.camera.source_type")} value={cameraForm.source_type} onChange={(event) => setCameraForm({ ...cameraForm, source_type: event.target.value as CameraSourceType })}>
             <option value="rtsp">RTSP</option>
-            <option value="usb">USB camera</option>
-            <option value="file">Video file</option>
-            <option value="demo">Demo feed</option>
+            <option value="usb">{t("settings.camera.source_usb")}</option>
+            <option value="file">{t("settings.camera.source_file")}</option>
+            <option value="demo">{t("settings.camera.source_demo")}</option>
           </Select>
-          <Input label="Source URL / index" required value={cameraForm.source_url} onChange={(event) => setCameraForm({ ...cameraForm, source_url: event.target.value })} placeholder="rtsp://… or 0" />
-          <Input label="FPS limit" type="number" min={1} max={30} value={cameraForm.fps_limit ?? 5} onChange={(event) => setCameraForm({ ...cameraForm, fps_limit: Number(event.target.value) })} />
-          <Input label="Position" value={cameraForm.position} onChange={(event) => setCameraForm({ ...cameraForm, position: event.target.value })} placeholder="front" />
-          <Textarea label="Notes" value={cameraForm.notes ?? ""} onChange={(event) => setCameraForm({ ...cameraForm, notes: event.target.value })} className="sm:col-span-2" />
+          <Input label={t("settings.camera.source_url")} required value={cameraForm.source_url} onChange={(event) => setCameraForm({ ...cameraForm, source_url: event.target.value })} placeholder="rtsp://… or 0" />
+          <Input label={t("settings.camera.fps")} type="number" min={1} max={30} value={cameraForm.fps_limit ?? 5} onChange={(event) => setCameraForm({ ...cameraForm, fps_limit: Number(event.target.value) })} />
+          <Input label={t("settings.camera.position")} value={cameraForm.position} onChange={(event) => setCameraForm({ ...cameraForm, position: event.target.value })} placeholder="front" />
+          <Textarea label={t("common.notes")} value={cameraForm.notes ?? ""} onChange={(event) => setCameraForm({ ...cameraForm, notes: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={userOpen}
         onClose={() => setUserOpen(false)}
-        title="Create a staff account"
+        title={t("settings.user.modal_title")}
         footer={
           <>
-            <Button variant="outline" onClick={() => setUserOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setUserOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={() => userMutation.mutate()} loading={userMutation.isPending} disabled={!userForm.email.trim() || !userForm.full_name.trim() || userForm.password.length < 8}>
-              Create user
+              {t("settings.create_user")}
             </Button>
           </>
         }
       >
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Full name" required value={userForm.full_name} onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })} />
-          <Input label="Email" type="email" required value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} />
-          <Input label="Temporary password" type="password" required value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} hint="Letters and digits, minimum 8" />
-          <Select label="Role" value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value as UserRole })}>
-            <option value="security_officer">Security officer</option>
-            <option value="admin">Administrator</option>
-            <option value="resident">Resident</option>
+          <Input label={t("settings.user.full_name")} required value={userForm.full_name} onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })} />
+          <Input label={t("common.email")} type="email" required value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} />
+          <Input label={t("settings.user.temporary")} type="password" required value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} hint={t("settings.user.temp_hint")} />
+          <Select label={t("common.role")} value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value as UserRole })}>
+            <option value="security_officer">{t("role.security_officer")}</option>
+            <option value="admin">{t("role.admin")}</option>
+            <option value="resident">{t("role.resident")}</option>
           </Select>
-          <Input label="Phone" value={userForm.phone} onChange={(event) => setUserForm({ ...userForm, phone: event.target.value })} className="sm:col-span-2" />
+          <Input label={t("common.phone")} value={userForm.phone} onChange={(event) => setUserForm({ ...userForm, phone: event.target.value })} className="sm:col-span-2" />
         </div>
       </Modal>
 
       <Modal
         open={passwordTarget !== null}
         onClose={() => setPasswordTarget(null)}
-        title="Reset password"
-        description={passwordTarget ? `Set a new password for ${passwordTarget.full_name}` : undefined}
+        title={t("settings.password.reset_title")}
+        description={passwordTarget ? t("settings.password.reset_description", { name: passwordTarget.full_name }) : undefined}
         size="sm"
         footer={
           <>
-            <Button variant="outline" onClick={() => setPasswordTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setPasswordTarget(null)}>{t("common.cancel")}</Button>
             <Button onClick={() => passwordTarget && resetPasswordMutation.mutate({ id: passwordTarget.id, password: newPassword })} loading={resetPasswordMutation.isPending} disabled={newPassword.length < 8}>
-              Reset password
+              {t("settings.password.reset_action")}
             </Button>
           </>
         }
       >
-        <Input label="New password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} hint="Minimum 8 characters with a letter and a digit" />
+        <Input label={t("settings.account.new")} type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} hint={t("settings.password.hint")} />
       </Modal>
 
       <ConfirmDialog
@@ -691,9 +693,9 @@ export function SettingsPage(): JSX.Element {
         onClose={() => setGateToDelete(null)}
         onConfirm={() => gateToDelete && deleteGateMutation.mutate(gateToDelete)}
         loading={deleteGateMutation.isPending}
-        title="Delete gate"
-        description={`Delete ${gateToDelete?.name ?? "this gate"} and its cameras? Historical access logs remain.`}
-        confirmLabel="Delete gate"
+        title={t("settings.delete_gate.title")}
+        description={t("settings.delete_gate.description", { name: gateToDelete?.name ?? t("settings.table.gate") })}
+        confirmLabel={t("settings.delete_gate.confirm")}
       />
 
       <ConfirmDialog
@@ -701,9 +703,9 @@ export function SettingsPage(): JSX.Element {
         onClose={() => setCameraToDelete(null)}
         onConfirm={() => cameraToDelete && deleteCameraMutation.mutate(cameraToDelete)}
         loading={deleteCameraMutation.isPending}
-        title="Delete camera"
-        description={`Remove ${cameraToDelete?.name ?? "this camera"} from the pipeline?`}
-        confirmLabel="Delete camera"
+        title={t("settings.delete_camera.title")}
+        description={t("settings.delete_camera.description", { name: cameraToDelete?.name ?? t("settings.table.camera") })}
+        confirmLabel={t("settings.delete_camera.confirm")}
       />
 
       <ConfirmDialog
@@ -711,9 +713,9 @@ export function SettingsPage(): JSX.Element {
         onClose={() => setUserToDeactivate(null)}
         onConfirm={() => userToDeactivate && deactivateMutation.mutate(userToDeactivate)}
         loading={deactivateMutation.isPending}
-        title="Deactivate user"
-        description={`${userToDeactivate?.full_name ?? "This user"} will no longer be able to sign in.`}
-        confirmLabel="Deactivate"
+        title={t("settings.deactivate.title")}
+        description={t("settings.deactivate.description", { name: userToDeactivate?.full_name ?? t("settings.table.user") })}
+        confirmLabel={t("settings.deactivate.confirm")}
       />
     </div>
   );

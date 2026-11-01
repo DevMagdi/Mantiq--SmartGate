@@ -69,6 +69,30 @@ class BoundingBox:
 
 
 @dataclass(frozen=True, slots=True)
+class VisionOptions:
+    """Per-invocation thresholds (usually the compound's vision policy).
+
+    ``None`` means "use the pipeline default", which in turn comes from the
+    process settings. This lets one deployment host several compounds with
+    different security postures without restarting the CV worker.
+    """
+
+    plate_confidence: float | None = None
+    ocr_confidence: float | None = None
+    face_similarity: float | None = None
+    include_face: bool = True
+
+    @classmethod
+    def from_policy(cls, policy: Any) -> "VisionOptions":
+        vision = getattr(policy, "vision", policy)
+        return cls(
+            plate_confidence=getattr(vision, "plate_confidence_threshold", None),
+            ocr_confidence=getattr(vision, "ocr_min_confidence", None),
+            face_similarity=getattr(vision, "face_similarity_threshold", None),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RawFrame:
     """A decoded camera frame with capture metadata."""
 
@@ -87,6 +111,7 @@ class PlateDetection:
 
     bbox: BoundingBox
     confidence: float
+    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

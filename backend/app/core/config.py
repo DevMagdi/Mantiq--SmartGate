@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     CV_MODE: CvMode = "mock"
     CV_PLATE_DETECTOR: str = "yolo"  # yolo | mock
     CV_PLATE_MODEL_PATH: str = "models/plate_yolov8.pt"
+    CV_YOLO_IMAGE_SIZE: int = 640
+    CV_YOLO_IOU: float = 0.45
+    CV_YOLO_DEVICE: str = ""  # "" = auto (CUDA when present), "cpu", "0", "cuda:1"
+    CV_YOLO_HALF: bool = False
+    CV_OCR_ALLOWLIST: bool = True
+
     CV_OCR_ENGINE: str = "easyocr"  # easyocr | paddleocr | mock
     CV_OCR_LANGUAGES: list[str] = Field(default_factory=lambda: ["en"])
     CV_FACE_ENGINE: str = "insightface"  # insightface | mock
@@ -107,11 +113,24 @@ class Settings(BaseSettings):
     CV_DEMO_CAMERAS: bool = True
     CV_DEMO_INTERVAL_SECONDS: float = 9.0
 
+    # Deployment-wide barrier defaults. A compound policy always wins; these
+    # let ops point every gate at one controller through the environment.
+    BARRIER_DRIVER: str = "simulator"  # simulator | webhook | mqtt | gpio
+    BARRIER_WEBHOOK_URL: str = ""
+    BARRIER_WEBHOOK_SECRET: str = ""
+    BARRIER_WEBHOOK_TIMEOUT_SECONDS: float = 3.0
+    BARRIER_COMMAND_TIMEOUT_SECONDS: float = 10.0
+
     # --------------------------------------------------------------- limits
     DEFAULT_PAGE_SIZE: int = 25
     MAX_PAGE_SIZE: int = 200
     EXPORT_ROW_LIMIT: int = 50_000
+    # Detections/snapshots are high volume; access logs are the audit trail and
+    # are kept longer. Both are pruned in batches to avoid long table locks.
     RETENTION_DAYS: int = 365
+    RETENTION_ACCESS_LOG_DAYS: int = 730
+    RETENTION_BATCH_SIZE: int = 5000
+    RETENTION_MAX_BATCHES: int = 200
 
     # ----------------------------------------------------------- schedulers
     MAINTENANCE_ENABLED: bool = True
@@ -156,6 +175,63 @@ class Settings(BaseSettings):
     def is_sqlite(self) -> bool:
         """Return ``True`` when the configured database is SQLite."""
         return self.DATABASE_URL.startswith("sqlite")
+
+    # Weak/default secrets that must never reach production.
+    _INSECURE_SECRETS = frozenset(
+        {
+            "change-me",
+            "changeme",
+            "local-dev-secret-change-me-please",
+            "secret",
+            "gatevision",
+            "test-secret-key-that-is-long-enough-1234567890",
+        }
+    )
+
+    def security_warnings(self) -> list[str]:
+        """Return configuration problems operators must fix before going live."""
+        problems: list[str] = []
+        secret = (self.SECRET_KEY or "").strip()
+        if secret.lower() in self._INSECURE_SECRETS or secret.startswith("change-me"):
+            problems.append("SECRET_KEY is a placeholder value; generate a random 64-char secret")
+        if len(secret) < 32:
+            problems.append("SECRET_KEY is shorter than 32 characters")
+        if "*" in self.CORS_ORIGINS:
+            problems.append("CORS_ORIGINS allows every origin; list the dashboard origins explicitly")
+        if "*" in self.TRUSTED_HOSTS:
+            problems.append("TRUSTED_HOSTS is unrestricted; set the real API host names")
+        if self.DEBUG:
+            problems.append("DEBUG=true must be disabled in production")
+        if self.BARRIER_DRIVER == "webhook" and self.BARRIER_WEBHOOK_URL.startswith("http://"):
+            problems.append("BARRIER_WEBHOOK_URL uses http://; controller commands include a reason")
+        return problems
+
+    def validate_production(self) -> list[str]:
+        """Raise on fatal misconfiguration, return non-fatal warnings.
+
+        Called during startup: failing fast is much better than discovering a
+        placeholder signing key or a wildcard CORS policy after go-live.
+        """
+        if not self.is_production:
+            return self.security_warnings()
+        warnings = self.security_warnings()
+        fatal = {
+            "SECRET_KEY is a placeholder value; generate a random 64-char secret",
+            "SECRET_KEY is shorter than 32 characters",
+            "CORS_ORIGINS allows every origin; list the dashboard origins explicitly",
+            "DEBUG=true must be disabled in production",
+        }
+        blocking = [item for item in warnings if item in fatal]
+        if blocking:
+            raise RuntimeError(
+                "Refusing to start in production with an insecure configuration: "
+                + "; ".join(blocking)
+            )
+        if self.is_sqlite:
+            warnings.append("SQLite is not recommended for production; use PostgreSQL")
+        if self.CV_MODE == "mock":
+            warnings.append("CV_MODE=mock: gate decisions are simulated, not from real cameras")
+        return warnings
 
     def ensure_directories(self) -> None:
         """Create runtime directories that must exist before serving."""

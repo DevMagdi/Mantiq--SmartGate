@@ -14,20 +14,26 @@ from app.api.deps import (
     SessionDep,
 )
 from app.core.exceptions import PermissionDeniedError
+from app.core.logging import get_logger
 from app.models.enums import UnitStatus, UnitType
 from app.schemas.common import Message, Page
 from app.schemas.compound import (
     CompoundCreate,
     CompoundRead,
+    CompoundSettingsRead,
+    CompoundSettingsUpdate,
     CompoundUpdate,
     UnitCreate,
     UnitRead,
     UnitUpdate,
 )
+from app.services.compound_policy import CompoundPolicy, mask_settings
 from app.services.compound_service import compound_service, unit_service
 from app.services.permissions import compound_scope, enforce_compound, is_admin
 
 router = APIRouter(prefix="/compounds", tags=["Compounds & Units"])
+
+logger = get_logger(__name__)
 
 
 @router.get("", response_model=Page[CompoundRead], summary="List compounds")
@@ -86,6 +92,64 @@ async def update_compound(
     return CompoundRead.model_validate(
         await compound_service.update(session, compound_id, payload)
     )
+
+
+@router.get(
+    "/{compound_id}/settings",
+    response_model=CompoundSettingsRead,
+    summary="Get the effective compound policy",
+)
+async def get_settings(
+    compound_id: uuid.UUID, session: SessionDep, manager: ManagerUser
+) -> CompoundSettingsRead:
+    """Return the raw document, the masked effective policy and the defaults."""
+    compound = await compound_service.get(session, compound_id)
+    enforce_compound(manager, compound.id)
+    policy = CompoundPolicy.from_settings(compound.settings)
+    return CompoundSettingsRead(
+        compound_id=compound.id,
+        raw=dict(compound.settings or {}),
+        effective=policy.to_dict(mask_secrets=True),
+        defaults=CompoundPolicy().to_dict(mask_secrets=True),
+    )
+
+
+@router.patch(
+    "/{compound_id}/settings",
+    response_model=CompoundSettingsRead,
+    summary="Update thresholds and barrier configuration",
+)
+async def update_settings(
+    compound_id: uuid.UUID,
+    payload: CompoundSettingsUpdate,
+    session: SessionDep,
+    admin: AdminUser,
+) -> CompoundSettingsRead:
+    """Deep-merge validated policy sections into the compound document."""
+    enforce_compound(admin, compound_id)
+    patch = payload.model_dump(exclude_unset=True, exclude_none=True)
+    compound = await compound_service.update_settings(session, compound_id, patch)
+    policy = CompoundPolicy.from_settings(compound.settings)
+    await _refresh_runtime_policy()
+    logger.info("Compound %s policy updated by %s", compound.code, admin.email)
+    return CompoundSettingsRead(
+        compound_id=compound.id,
+        raw=mask_settings(compound.settings),
+        effective=policy.to_dict(mask_secrets=True),
+        defaults=CompoundPolicy().to_dict(mask_secrets=True),
+    )
+
+
+async def _refresh_runtime_policy() -> None:
+    """Apply new thresholds to running camera workers when present."""
+    from app.cv.manager import get_camera_manager
+
+    manager = get_camera_manager()
+    if manager is not None:
+        try:
+            await manager.refresh_policies()
+        except Exception:  # pragma: no cover - never fail the API on supervisor issues
+            logger.exception("Could not refresh camera policies")
 
 
 @router.delete("/{compound_id}", response_model=Message, summary="Delete a compound")

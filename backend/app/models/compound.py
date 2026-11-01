@@ -23,7 +23,7 @@ from app.models.types import enum_column
 if TYPE_CHECKING:
     from app.models.access import AccessLog, DetectionEvent
     from app.models.people import Permit, Resident, Visitor
-    from app.models.security import BlacklistEntry, FaceEmbedding
+    from app.models.security import BlacklistEntry, FaceEmbedding  # noqa: F401 - mapper registration
     from app.models.user import User
 
 

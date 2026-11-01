@@ -11,12 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.events import publish_event
 from app.core.logging import get_logger
+from app.core.metrics import set_engine_state
 from app.cv.engine import get_vision_engine
 from app.cv.gate_controller import GateController, get_gate_controller
 from app.models.compound import Camera, Compound, Gate
 from app.models.enums import CameraStatus
 from app.models.security import FaceEmbedding
-from app.schemas.access import GateCommandResult, VisionPipelineStatus
+from app.schemas.access import (
+    ActuatorCommandRead,
+    ActuatorStatus,
+    ActuatorStatusResponse,
+    GateCommandResult,
+    VisionPipelineStatus,
+)
+from app.services.compound_policy import CompoundPolicy
 from app.schemas.security import FaceGalleryInfo
 
 logger = get_logger(__name__)
@@ -37,6 +45,11 @@ class CvService:
         if compound_id is not None:
             stmt = stmt.where(FaceEmbedding.compound_id == compound_id)
         gallery_size = int(await session.scalar(stmt) or 0)
+        set_engine_state(
+            ready=bool(engine_status["engine_ready"]),
+            mode=str(engine_status["mode"]),
+            gallery_entries=gallery_size,
+        )
         return VisionPipelineStatus(
             mode=str(engine_status["mode"]),
             plate_detector=str(engine_status["plate_detector"]),
@@ -76,6 +89,49 @@ class CvService:
             action=action,
             accepted=command.accepted,
             detail=command.detail,
+            driver=command.driver,
+            latency_ms=command.latency_ms,
+            command_id=command.command_id,
+        )
+
+    async def actuator_status(
+        self, session: AsyncSession, compound_id: uuid.UUID | None
+    ) -> ActuatorStatusResponse:
+        """Return barrier driver health and recent commands per compound."""
+        stmt = select(Compound).order_by(Compound.name)
+        if compound_id is not None:
+            stmt = stmt.where(Compound.id == compound_id)
+        compounds = list((await session.execute(stmt)).scalars().all())
+        registry = self.controller.registry
+        entries: list[ActuatorStatus] = []
+        for compound in compounds:
+            policy = CompoundPolicy.from_settings(compound.settings)
+            try:
+                await registry.for_policy(compound.id, policy.barrier)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Could not prepare actuator for %s: %s", compound.id, exc)
+            snapshot = registry.status(compound.id)
+            entries.append(
+                ActuatorStatus(
+                    compound_id=compound.id,
+                    compound_name=compound.name,
+                    configured=bool(snapshot.get("configured")),
+                    driver=str(snapshot.get("driver") or "simulator"),
+                    name=snapshot.get("name"),
+                    config=dict(snapshot.get("config") or {}),
+                    health=dict(snapshot.get("health") or {}),
+                    warnings=list(snapshot.get("warnings") or []),
+                    journal=self.controller.journal.summary(),
+                    recent_commands=[
+                        ActuatorCommandRead(**item.as_dict())
+                        for item in self.controller.journal.recent(
+                            10, compound_id=str(compound.id)
+                        )
+                    ],
+                )
+            )
+        return ActuatorStatusResponse(
+            compounds=entries, journal=self.controller.journal.summary()
         )
 
     async def camera_health(self, session: AsyncSession, compound_id: uuid.UUID | None) -> dict[str, int]:

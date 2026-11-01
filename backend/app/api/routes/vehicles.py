@@ -17,7 +17,7 @@ from app.core.exceptions import PermissionDeniedError
 from app.models.enums import VehicleStatus
 from app.schemas.common import Message, Page
 from app.schemas.vehicle import VehicleCreate, VehicleRead, VehicleUpdate
-from app.services.permissions import compound_scope, enforce_compound, is_manager
+from app.services.permissions import enforce_compound, is_manager
 from app.services.resident_service import resident_service
 from app.services.vehicle_service import vehicle_service
 

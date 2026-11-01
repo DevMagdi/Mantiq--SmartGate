@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,6 +79,33 @@ class CompoundService:
         compound = await self.get(session, compound_id)
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(compound, field, value)
+        await session.commit()
+        await session.refresh(compound)
+        return compound
+
+    async def update_settings(
+        self,
+        session: AsyncSession,
+        compound_id: uuid.UUID,
+        patch: dict[str, Any],
+    ) -> Compound:
+        """Deep-merge a policy patch into ``compound.settings``.
+
+        Unknown keys written by older releases are preserved; incoming secrets
+        set to the mask placeholder are ignored so a round-trip through the UI
+        cannot erase them.
+        """
+        from app.services.compound_policy import CompoundPolicy
+
+        compound = await self.get(session, compound_id)
+        merged = _deep_merge(dict(compound.settings or {}), patch)
+        _drop_masked_secrets(merged)
+        # Validate by parsing: invalid values are clamped to safe defaults.
+        policy = CompoundPolicy.from_settings(merged)
+        merged["vision"] = policy.vision.to_dict()
+        merged["access"] = policy.access.to_dict()
+        merged["barrier"] = policy.barrier.to_dict(mask_secrets=False)
+        compound.settings = merged
         await session.commit()
         await session.refresh(compound)
         return compound
@@ -204,3 +232,31 @@ class UnitService:
 
 compound_service = CompoundService()
 unit_service = UnitService()
+
+
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``patch`` into ``base`` without mutating the input."""
+    merged = dict(base)
+    for key, value in patch.items():
+        if value is None:
+            continue
+        current = merged.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _drop_masked_secrets(document: dict[str, Any]) -> None:
+    """Remove ``********`` placeholders so masked read-modify-write is safe."""
+    barrier = document.get("barrier")
+    if not isinstance(barrier, dict):
+        return
+    for section in ("webhook", "mqtt"):
+        block = barrier.get(section)
+        if not isinstance(block, dict):
+            continue
+        for key in ("secret", "password"):
+            if block.get(key) == "********":
+                block.pop(key, None)
