@@ -370,3 +370,17 @@ def test_camera_api_masks_stream_credentials(
             return camera.source_url
 
     assert asyncio.run(_stored()).endswith("S3cretPass@10.9.9.9:554/Streaming/Channels/101")
+
+
+def test_real_mode_status_reports_plate_weights_presence(client: TestClient) -> None:
+    """The dashboard needs to tell "no weights" apart from "camera is blind"."""
+    login = client.post(
+        f"{API}/auth/login",
+        json={"email": "admin@gatevision.app", "password": "Admin@12345"},
+    )
+    token = login.json()["access_token"]
+    response = client.get(f"{API}/cv/real-mode", headers={"authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["plate_model_present"], bool)
+    assert "model_path" in payload["models"]
