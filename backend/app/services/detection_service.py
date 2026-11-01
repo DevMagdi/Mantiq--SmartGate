@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +20,7 @@ from app.cv.gate_controller import AccessDecisionEngine, DecisionContext, Decisi
 from app.cv.snapshots import SnapshotStore
 from app.cv.demo_data import mock_meta_for_scenario, scenario_by_key
 from app.cv.types import VisionOptions, VisionResult
-from app.cv.utils import clean_plate_text, format_plate, normalize_plate
+from app.cv.utils import format_plate, normalize_plate
 from app.db.session import session_scope
 from app.models.access import AccessLog, DetectionEvent
 from app.models.base import as_utc
@@ -28,7 +28,6 @@ from app.models.compound import Camera, Compound, Gate
 from app.models.enums import (
     AccessDecision,
     AccessDirection,
-    AccessMethod,
     DetectionType,
     VisitorStatus,
 )
@@ -37,7 +36,6 @@ from app.models.user import User
 from app.models.vehicle import Vehicle
 from app.services.face_service import decode_image, face_service
 from app.services.compound_policy import CompoundPolicy
-from app.services.vehicle_service import vehicle_service
 from app.cv.worker import ResultEnvelope
 
 logger = get_logger(__name__)

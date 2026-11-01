@@ -23,7 +23,6 @@ from app.core.security import hash_password
 from app.cv.snapshots import SnapshotStore
 from app.cv.utils import deterministic_embedding, normalize_plate
 from app.models.access import AccessLog, DetectionEvent
-from app.models.base import as_utc
 from app.models.compound import Camera, Compound, Gate, Unit
 from app.models.enums import (
     AccessDecision,

@@ -169,7 +169,7 @@ def test_retention_supports_dry_run_and_batching(
             )
 
         async with session_scope() as session:
-            second = await purge_expired_records(
+            await purge_expired_records(
                 session, access_log_days=800, batch_size=10, max_batches=10
             )
 

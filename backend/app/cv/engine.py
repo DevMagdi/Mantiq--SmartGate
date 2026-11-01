@@ -57,7 +57,6 @@ class VisionEngine:
         with self._build_lock:
             if self._pipeline is not None:
                 return self._pipeline
-            cfg = self.config
             if self.mode == "mock":
                 self._warnings.append(
                     "Mock vision engine active: detections are simulated for the offline demo "

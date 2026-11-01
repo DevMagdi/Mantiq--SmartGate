@@ -12,6 +12,7 @@ from app.models.enums import VehicleStatus, VehicleType
 from app.models.people import Resident
 from app.models.vehicle import Vehicle
 from app.schemas.common import Page
+from app.schemas.vehicle import VehicleCreate, VehicleUpdate
 from app.cv.utils import format_plate, normalize_plate
 from app.services.pagination import PageParams, apply_sort, build_page, count_rows
 

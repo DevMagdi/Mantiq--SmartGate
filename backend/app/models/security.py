@@ -24,7 +24,7 @@ from app.models.types import enum_column
 if TYPE_CHECKING:
     from app.models.compound import Compound
     from app.models.people import Resident, Visitor
-    from app.models.user import User
+    from app.models.user import User  # noqa: F401 - mapper registration
 
 
 class BlacklistEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):

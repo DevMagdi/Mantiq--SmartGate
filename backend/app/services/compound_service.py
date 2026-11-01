@@ -95,7 +95,7 @@ class CompoundService:
         set to the mask placeholder are ignored so a round-trip through the UI
         cannot erase them.
         """
-        from app.services.compound_policy import SECRET_PLACEHOLDER, CompoundPolicy
+        from app.services.compound_policy import CompoundPolicy
 
         compound = await self.get(session, compound_id)
         merged = _deep_merge(dict(compound.settings or {}), patch)

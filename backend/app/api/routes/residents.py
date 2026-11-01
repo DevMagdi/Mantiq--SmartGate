@@ -17,7 +17,7 @@ from app.core.exceptions import PermissionDeniedError
 from app.models.enums import ResidentStatus
 from app.schemas.common import Message, Page
 from app.schemas.people import ResidentCreate, ResidentRead, ResidentUpdate
-from app.services.permissions import compound_scope, enforce_compound, is_manager
+from app.services.permissions import enforce_compound, is_manager
 from app.services.resident_service import resident_service
 
 router = APIRouter(prefix="/residents", tags=["Residents"])
