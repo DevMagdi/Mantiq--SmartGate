@@ -318,6 +318,25 @@ describe("GateVision dashboard", () => {
     expect(await screen.findByText(/no live snapshot/i, {}, { timeout: 20_000 })).toBeTruthy();
   });
 
+  it("edits an issued permit from the permits table", async () => {
+    await signIn("admin");
+    renderAt("/visitors");
+
+    await screen.findByRole("heading", { name: /visitors & permits/i }, { timeout: 20_000 });
+    (await screen.findByRole("tab", { name: /permits/i })).click();
+    const permitRows = await screen.findAllByText(/PMT-/, {}, { timeout: 20_000 });
+    expect(permitRows.length).toBeGreaterThan(0);
+
+    screen.getAllByRole("button", { name: /^edit$/i })[0].click();
+    expect(await screen.findByText(/edit permit/i, {}, { timeout: 20_000 })).toBeTruthy();
+
+    const entries = screen.getByLabelText(/maximum entries/i);
+    fireEvent.change(entries, { target: { value: "3" } });
+    screen.getByRole("button", { name: /save changes/i }).click();
+
+    expect(await screen.findByText(/permit updated/i, {}, { timeout: 20_000 })).toBeTruthy();
+  });
+
   it("screens an enrollment photo through the quality-check endpoint", async () => {
     await signIn("admin");
     renderAt("/security");
