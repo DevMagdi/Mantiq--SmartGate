@@ -1,0 +1,9 @@
+.git
+node_modules
+dist
+.vite
+coverage
+*.tsbuildinfo
+.env
+.env.local
+.env.test

@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ------------------------------------------------------------------ Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# --------------------------------------------------------------- Runtime
+*.db
+*.sqlite3
+backend/media/
+backend/models/
+/tmp/
+logs/
+*.log
+
+# ------------------------------------------------------------------ Env
+.env
+.env.local
+.env.*.local
+frontend/.env.test.local
+!.env.example
+!frontend/.env.example
+!backend/.env.example
+
+# ------------------------------------------------------------------- IDE
+.idea/
+.vscode/
+.DS_Store

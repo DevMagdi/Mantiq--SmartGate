@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    @apply bg-ink-50 text-ink-900;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  .dark body {
+    @apply bg-ink-950 text-ink-100;
+  }
+
+  ::selection {
+    @apply bg-brand-200 text-brand-950;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-300/70 dark:bg-ink-700/80;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply rounded-2xl border border-ink-200/80 bg-white shadow-card dark:border-ink-800 dark:bg-ink-900;
+  }
+
+  .surface-muted {
+    @apply rounded-2xl border border-ink-200/70 bg-ink-50/70 dark:border-ink-800 dark:bg-ink-900/60;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400;
+  }
+
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-ink-950;
+  }
+
+  .table-head {
+    @apply bg-ink-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:bg-ink-900/70 dark:text-ink-400;
+  }
+}
