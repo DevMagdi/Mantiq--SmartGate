@@ -578,6 +578,8 @@ export interface RealModeStatus {
   demo_cameras: number;
   barrier_driver: string;
   models: Record<string, string>;
+  /** CV_PLATE_MODEL_PATH exists on the worker host. */
+  plate_model_present: boolean;
 }
 
 export type BarrierDriver = "simulator" | "webhook" | "mqtt" | "gpio";

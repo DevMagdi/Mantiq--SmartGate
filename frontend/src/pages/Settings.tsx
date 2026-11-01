@@ -535,6 +535,25 @@ export function SettingsPage(): JSX.Element {
                   </div>
                 ))}
               </dl>
+              {realMode.data ? (
+                <p
+                  className={`mt-2 flex items-center gap-1.5 text-[11px] ${
+                    realMode.data.plate_model_present
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-amber-700 dark:text-amber-300"
+                  }`}
+                >
+                  <Icon
+                    name={realMode.data.plate_model_present ? "check" : "alert"}
+                    className="h-3.5 w-3.5 shrink-0"
+                  />
+                  <span>
+                    {realMode.data.plate_model_present
+                      ? t("settings.vision.model_present")
+                      : t("settings.vision.model_missing")}
+                  </span>
+                </p>
+              ) : null}
             </div>
             {(realMode.data?.warnings ?? []).length > 0 ? (
               <ul className="space-y-1 text-[11px] text-amber-700 sm:col-span-2 dark:text-amber-300">
