@@ -217,7 +217,7 @@ updating). `error` stores the decoder message in `last_error`.
 ## 5. Tune the thresholds per compound
 
 Global `CV_*` values are the defaults; each compound can override them from
-the dashboard (Settings → Gate policy) or via the API, without a restart:
+the dashboard (Settings → Policy & barrier) or via the API, without a restart:
 
 ```bash
 curl -X PATCH localhost:8000/api/v1/compounds/$COMPOUND_ID/settings \
